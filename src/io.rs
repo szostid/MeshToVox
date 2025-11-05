@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::octree::*;
 use crate::*;
 use bytemuck::Pod;
@@ -216,29 +218,123 @@ mod magica {
 }
 
 impl Octree {
-    pub fn save_as_magica_voxel(&self, file_path: &str, size: u32) -> std::io::Result<()> {
-        let mut vox = vox_writer::VoxWriter::create(size as i32, size as i32, size as i32);
+    pub fn save_as_magica_voxel(&self, file_path: &str, size: u32) -> Result<()> {
+        use dot_vox::*;
+
+        const CHUNK_SIZE: i32 = 256;
 
         let nodes = self.collect_nodes();
-        for index in 0..u8::MAX {
-            let color = magica::decode(index);
 
-            vox.add_color(color.0[0], color.0[1], color.0[1], 0, index);
-        }
+        let mut chunks = HashMap::<IVec3, Vec<dot_vox::Voxel>>::new();
 
         for (coords, color) in nodes {
             let color = octree_header::to_color(color);
             let color_idx = magica::encode(color);
 
-            vox.add_voxel(
-                coords.coords.x - 1,
-                coords.coords.y - 1,
-                coords.coords.z - 1,
-                color_idx as i32,
-            );
+            let chunk = coords.coords / CHUNK_SIZE;
+            let local_coords = (coords.coords % CHUNK_SIZE).as_u8vec3();
+
+            chunks.entry(chunk).or_default().push(dot_vox::Voxel {
+                x: local_coords.x,
+                y: local_coords.y,
+                z: local_coords.z,
+                i: color_idx,
+            });
         }
 
-        vox.save_to_file(file_path.to_string())
+        let mut palette = Vec::with_capacity(256);
+
+        for index in 0..u8::MAX {
+            let color = magica::decode(index);
+            palette.push(dot_vox::Color {
+                r: color.0[2],
+                g: color.0[1],
+                b: color.0[0],
+                a: 255,
+            });
+        }
+
+        let mut models = Vec::new();
+        let mut nodes = Vec::new();
+
+        nodes.push(SceneNode::Transform {
+            attributes: Default::default(),
+            frames: vec![Frame {
+                attributes: Default::default(),
+            }],
+            child: 1,
+            layer_id: 0,
+        });
+
+        nodes.push(SceneNode::Group {
+            attributes: Default::default(),
+            children: Vec::new(),
+        });
+
+        for (chunk, voxels) in chunks {
+            let model_id = models.len() as u32;
+
+            models.push(Model {
+                size: Size {
+                    x: CHUNK_SIZE as u32,
+                    y: CHUNK_SIZE as u32,
+                    z: CHUNK_SIZE as u32,
+                },
+                voxels,
+            });
+
+            let transform_index = nodes.len() as u32;
+            let shape_index = transform_index + 1;
+
+            nodes.push(SceneNode::Transform {
+                attributes: Default::default(),
+                frames: vec![Frame {
+                    attributes: [(
+                        "_t".to_string(),
+                        format!(
+                            "{} {} {}",
+                            chunk.x * CHUNK_SIZE,
+                            chunk.y * CHUNK_SIZE,
+                            chunk.z * CHUNK_SIZE
+                        ),
+                    )]
+                    .into(),
+                }],
+                child: shape_index,
+                layer_id: 0,
+            });
+
+            nodes.push(SceneNode::Shape {
+                attributes: Default::default(),
+                models: vec![ShapeModel {
+                    model_id,
+                    attributes: Default::default(),
+                }],
+            });
+
+            let SceneNode::Group { children, .. } = &mut nodes[1] else {
+                unreachable!()
+            };
+
+            children.push(transform_index);
+        }
+
+        // Construct the scene
+        let data = dot_vox::DotVoxData {
+            version: 150,
+            models,
+            palette,
+            materials: Vec::new(),
+            layers: Vec::new(),
+            scenes: nodes,
+        };
+
+        // Write the file
+        let mut file = std::fs::File::create(file_path)?;
+
+        data.write_vox(&mut file)?;
+
+        Ok(())
     }
 
     pub fn save_as_gltf(

@@ -14,7 +14,6 @@ gltf = { version = "1.4.1", default-features = false, features = [
     "utils",
     "KHR_materials_pbrSpecularGlossiness",
 ] }
-vox_writer = "0.1.9"
 json = { version = "0.12.4", default-features = false }
 clap = { version = "4.5.4", features = ["derive"] }
 glam = { version = "0.30.9", features = ["bytemuck"] }
@@ -23,3 +22,4 @@ anyhow = "1.0.100"
 rayon = "1.11.0"
 profiling = { version = "1.0.17", features = ["profile-with-tracy"] }
 tracy-client = "0.18.2"
+dot_vox = "5.1.1"
