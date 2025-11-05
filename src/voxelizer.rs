@@ -1,219 +1,180 @@
-pub type Fcords = nalgebra::Vector3<f32>;
-use nalgebra as na;
-use nalgebra_glm as glm;
-use crate::{io::{ImageOrColor, Mesh}, octree::{Octree, OctreeCord}, utils::Icords};
-use crate::utils::{closest_point_triangle, get_barycentric_coordinates};
+use crate::io::{ImageOrColor, Mesh};
+use crate::math::{closest_point_triangle, get_barycentric_coordinates};
+use crate::octree::*;
+use glam::*;
 
-pub trait VoxelStorage{
-    fn store(&mut self, position : na::Vector3<i32>, val : image::Rgb<u8>);
+fn voxelize_wireframe(store: &mut Octree, shading: &Shading, tri_pos: [Vec3; 3]) {
+    voxelize_line(store, shading, tri_pos[0], tri_pos[1]);
+    voxelize_line(store, shading, tri_pos[1], tri_pos[2]);
+    voxelize_line(store, shading, tri_pos[0], tri_pos[2]);
 }
 
-impl VoxelStorage for Octree{
-    fn store(&mut self, position : na::Vector3<i32>, val : image::Rgb<u8>) {
-        let node = OctreeCord{cords : Icords::from_na(position), depth : self.depth};
+fn voxelize_triangle(store: &mut Octree, shading: &Shading, tri_pos: [Vec3; 3]) {
+    const LINES: [(usize, usize); 3] = [(1, 2), (0, 2), (0, 1)];
 
-        // bc floating point error some erroneous voxels
-        if node.cords.min() < 1 || node.cords.max() >= ((1 << (self.depth + 1)) - 1){return;}
+    let (a, b, ab) = LINES
+        .map(|(a, b)| (a, b, tri_pos[a].distance_squared(tri_pos[b])))
+        .into_iter()
+        .max_by(|(_, _, l1), (_, _, l2)| l1.total_cmp(l2))
+        .map(|(a, b, ab)| (a, b, ab.sqrt()))
+        .unwrap();
 
-        self.insert(&node, val);
+    let c = 3 - a - b;
+
+    // ab is the longest line, c is the point that doesn't lay on it
+    // we want to cast a bunch of lines from the point c onto the longest line ab
+
+    let num_steps = (ab.ceil() as i32).max(1);
+    let dir = (tri_pos[b] - tri_pos[a]) / num_steps as f32;
+
+    for i in 0..=num_steps {
+        let start = tri_pos[a] + dir * i as f32;
+        voxelize_line(store, shading, start, tri_pos[c]);
     }
 }
 
-fn dst(a : Fcords, b : Fcords) -> f32{
-    let dif = a- b;
-    (dif.x * dif.x) + (dif.y * dif.y) + (dif.z * dif.z)
-}
+/// Voxelizes a line going from `p1` to `p2` with the provided shading using a DDA algorythm
+fn voxelize_line(store: &mut Octree, shading: &Shading, p1: Vec3, p2: Vec3) {
+    let end = p2.as_ivec3();
+    let ray_pos = p1;
 
-fn voxelize_tri<const WIRE_FRAME : bool>(store : &mut impl VoxelStorage, shading : &Shading, tri_pos : [na::Vector3<f32>; 3]){
-    if WIRE_FRAME{
-        voxelize_line(store, shading, tri_pos[0], tri_pos[1]);
-        voxelize_line(store, shading, tri_pos[1], tri_pos[2]);
-        voxelize_line(store, shading, tri_pos[0], tri_pos[2]);
-    }else{
-        //don't know if min distance sorting acctualy improves perision
-        const PARS : [(usize, usize); 3]= [(1, 2), (0, 2), (0, 1)];
-        let dsts = PARS.map(|(a, b)|{dst(tri_pos[a], tri_pos[b])});
-        let mut min_idx = 0;
-        let mut min_dst = dsts[0];
-        for idx in 1..3{
-            if dsts[idx] > min_dst{min_dst = dsts[idx]; min_idx = idx;}
-        }
-
-        let (a, b) = PARS[min_idx];
-        let dst1 = dsts[min_idx].sqrt();
-        let num_steps = (dst1.ceil() as i32).max(1);
-        let dir : na::Vector3<f32> = (tri_pos[b] - tri_pos[a]) / (num_steps as f32);
-        
-        for i in 0..(num_steps + 1){
-            let start : na::Vector3<f32> = tri_pos[a] + (dir * i as f32);
-
-            voxelize_line(store, shading, start, tri_pos[min_idx]);
-        };
+    if p1 == p2 {
+        return;
     }
-}
 
-fn voxelize_line(store : &mut impl VoxelStorage, shading : &Shading, p1 : na::Vector3<f32>, p2 : na::Vector3<f32>){
+    let ray_dir = (p2 - p1).normalize();
 
-    let end = p2.try_cast::<i32>().unwrap();
-    let ray_pos : na::Vector3<f32> = p1;
+    if !ray_dir.is_finite() {
+        return;
+    }
 
-    if p1 == p2 {return;}
-    let ray_dir : na::Vector3<f32> = glm::normalize(&(p2 - p1));
-    if ray_dir.x.is_nan() || ray_dir.x.is_infinite(){return;}
+    let mut map_pos = ray_pos.floor().as_ivec3();
 
-    let temp_pos : na::Vector3<f32> = glm::floor(&ray_pos);
-    let map_pos : na::Vector3<i32> = na::Vector3::new(temp_pos.x as i32, temp_pos.y as i32, temp_pos.z as i32);
+    let t_delta = (Vec3::ONE / ray_dir).abs();
+    let step = ray_dir.signum().as_ivec3();
 
-    let len = glm::length(&ray_dir);
-    let delta_dist : na::Vector3<f32> = glm::abs(&(glm::Vec3::new(len, len, len).component_div(&ray_dir)));
+    let mut t_max = (ray_dir).signum() * (map_pos.as_vec3() - ray_pos);
 
-    let temp_dir : na::Vector3<f32> = glm::sign(&ray_dir);
-    let ray_step : na::Vector3<i32> = na::Vector3::new(temp_dir.x as i32, temp_dir.y as i32, temp_dir.z as i32);
-    
-    let mut side_dist : na::Vector3<f32> = (glm::sign(&ray_dir)).component_mul(&(map_pos.cast() - ray_pos));
-    side_dist = (side_dist + (glm::sign(&ray_dir) * 0.5f32).add_scalar(0.5f32)).component_mul(&delta_dist);
-    
-    voxelize_loop(store, shading, side_dist, delta_dist, ray_step, map_pos, end);
+    t_max = (t_max + (ray_dir.signum() * 0.5f32) + Vec3::splat(0.5)) * t_delta;
 
-
-}
-
-fn voxelize_loop(store : &mut impl VoxelStorage, shading : &Shading, mut side_dist : na::Vector3<f32>, delta_dist : na::Vector3<f32>, ray_step : na::Vector3<i32>, mut map_pos : na::Vector3<i32>, end : na::Vector3<i32>){
-
-    loop{
+    loop {
         let color = shading.get_color(map_pos);
+
         store.store(map_pos, color);
-        if map_pos == end{break;}
-        
-        if side_dist.x < side_dist.y {
-            if side_dist.x < side_dist.z {
-                side_dist.x += delta_dist.x;
-                map_pos.x += ray_step.x;
-            }
-            else {
-                side_dist.z += delta_dist.z;
-                map_pos.z += ray_step.z;
-            }
+
+        if map_pos == end {
+            break;
         }
-        else {
-            if side_dist.y < side_dist.z {
-                side_dist.y += delta_dist.y;
-                map_pos.y += ray_step.y;
-            }
-            else {
-                side_dist.z += delta_dist.z;
-                map_pos.z += ray_step.z;
-            }
-        }
+
+        let smallest = t_max.min_position();
+
+        t_max[smallest] += t_delta[smallest];
+        map_pos[smallest] += step[smallest];
     }
 }
 
-
 #[derive(Debug)]
-struct TexturedShading<'a>{
-    pub image : &'a image::RgbImage,
-    pub tri_cords : [na::Vector3<f32>; 3],
-    pub text_cords : [na::Vector2<f32>; 3],
+struct TexturedShading<'a> {
+    pub image: &'a image::RgbImage,
+    pub vertices: [Vec3; 3],
+    pub uvs: [Vec2; 3],
 }
 
 #[derive(Debug)]
-enum Shading<'a>{
-    Texture(TexturedShading<'a>), 
-    Color([u8; 3])
+enum Shading<'a> {
+    Texture(TexturedShading<'a>),
+    Color([u8; 3]),
 }
 
-impl Shading<'_>{
-    pub fn get_color(&self, map_pos : na::Vector3<i32>) -> image::Rgb<u8>{
-        #[inline]
-        pub fn wrap_around(x : f32) -> f32{
-            let x = x % 1.0;
-            if x < 0.{1. + x}
-            else{x}
-        }
+impl Shading<'_> {
+    pub fn get_color(&self, map_pos: IVec3) -> image::Rgb<u8> {
+        match self {
+            Shading::Texture(texture) => {
+                let point = closest_point_triangle(map_pos.as_vec3(), texture.vertices);
 
-        match self{
-            Shading::Texture(texture) =>{
+                let barycentric = get_barycentric_coordinates(point, texture.vertices);
 
-                let point = closest_point_triangle(map_pos.cast(), texture.tri_cords[0], 
-                texture.tri_cords[1], texture.tri_cords[2]);
+                let mut texture_cords = (texture.uvs[0] * barycentric.x)
+                    + (texture.uvs[1] * barycentric.y)
+                    + (texture.uvs[2] * barycentric.z);
 
-                let weights = get_barycentric_coordinates(point, texture.tri_cords[0], 
-                    texture.tri_cords[1], texture.tri_cords[2]);
-                
-                let mut texture_cords = (texture.text_cords[0] * weights.x) + 
-                    (texture.text_cords[1] * weights.y) + (texture.text_cords[2] * weights.z);
-
-                texture_cords.x = wrap_around(texture_cords.x);
-                texture_cords.y = wrap_around(texture_cords.y);
+                texture_cords.x = texture_cords.x.rem_euclid(1.0);
+                texture_cords.y = texture_cords.y.rem_euclid(1.0);
 
                 let (x, y) = texture.image.dimensions();
                 let x = (((x - 1) as f32) * texture_cords.x) as u32;
                 let y = (((y - 1) as f32) * texture_cords.y) as u32;
-                
-                let color = texture.image.get_pixel(x, y);
-                image::Rgb([color.0[0], color.0[1], color.0[2]])
+
+                *texture.image.get_pixel(x, y)
             }
 
-            Shading::Color(color) => {image::Rgb(*color)}
+            Shading::Color(color) => image::Rgb(*color),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum VoxelizationMode{
+pub enum VoxelizationMode {
     Triangles,
     Lines,
-    Points
+    Points,
 }
 
-pub fn voxelize_point(store : &mut impl VoxelStorage, point : Fcords){
-    let point = point.map(|f|{f.round() as i32});
+pub fn voxelize_point(store: &mut Octree, point: Vec3) {
+    let point = point.round().as_ivec3();
     store.store(point, image::Rgb([32, 32, 32]))
 }
 
-pub fn voxelize(mesh : &Mesh, size : u32, mode : VoxelizationMode) -> Octree{
-    let num_tris = mesh.triangle.len();
+#[profiling::function]
+pub fn voxelize(mesh: &Mesh, size: u32, mode: VoxelizationMode) -> Octree {
+    let num_tris = mesh.triangles.len();
 
-    //leave one voxel gap around model to allow for inside/outside checking
+    // leave one voxel gap around model to allow for inside/outside checking
     let max_size = size - 1;
-    let depth = 31 - (size + 1).leading_zeros(); 
+    let depth = 31 - (size + 1).leading_zeros();
 
-    let differnce : Fcords = mesh.bounds.max - mesh.bounds.min;
-    let max_differnce = differnce.x.max(differnce.y).max(differnce.z);
+    let largest_dim = mesh.bounds.size().max_element();
 
-    let scale : na::Vector3::<f64> = na::Vector3::new(max_size as f64, max_size as f64, max_size as f64) / max_differnce as f64;
+    let scale = max_size as f32 / largest_dim;
+
     let mut tree = Octree::new(depth);
 
-    for tri in 0..num_tris{
-        let trii_pos = mesh.triangle[tri];
-        let tri_pos = trii_pos.map(|vert|{
+    for tri in 0..num_tris {
+        // we have to translate every vertex into a position relative to
+        // the bounds of the storage, and then scaled to fit as well as
+        // possible
+        let vertices = mesh.triangles[tri]
+            .map(|vertex| vertex - mesh.bounds.min)
+            .map(|vertex| vertex * scale)
+            .map(|vertex| vertex + Vec3::ONE);
 
-            ((vert - mesh.bounds.min).cast::<f64>().component_mul(&scale).add_scalar(1.0)).cast::<f32>()
-        });
+        let mat_id = mesh.triangle_extras[tri][0].material_idx;
+        let material = &mesh.materials[mat_id as usize];
 
-        let mat_id = mesh.extras[tri][0].material_idx;
-        let materail = &mesh.materials[mat_id as usize];
+        let shading = match material {
+            ImageOrColor::Image(image) => {
+                let uvs = mesh.triangle_extras[tri].map(|extras| extras.uv().unwrap());
 
-        let shading = match materail {
-            ImageOrColor::Image(img) =>{
-                let refer = &mesh.extras[tri];
-                let uv_position = refer.clone().map(|x|{x.uv.unwrap()});
-                let texture = TexturedShading{image : img, tri_cords : tri_pos, text_cords: uv_position};
-                
+                let texture = TexturedShading {
+                    image,
+                    vertices,
+                    uvs,
+                };
+
                 Shading::Texture(texture)
             }
-            ImageOrColor::Color(color) => {Shading::Color(*color)}
+            ImageOrColor::Color(color) => Shading::Color(*color),
         };
 
-        match mode{
+        match mode {
             VoxelizationMode::Triangles => {
-                voxelize_tri::<false>(&mut tree, &shading, tri_pos);
+                voxelize_triangle(&mut tree, &shading, vertices);
             }
             VoxelizationMode::Lines => {
-                voxelize_tri::<true>(&mut tree, &shading, tri_pos);
+                voxelize_wireframe(&mut tree, &shading, vertices);
             }
             VoxelizationMode::Points => {
-                for point in tri_pos{
+                for point in vertices {
                     voxelize_point(&mut tree, point);
                 }
             }

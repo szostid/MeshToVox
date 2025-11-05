@@ -1,19 +1,25 @@
 [package]
 name = "mesh_to_vox"
 version = "0.1.1"
-edition = "2021"
+edition = "2024"
 repository = "https://github.com/noahbadoa/MeshToVox"
 keywords = ["glTF", "3D", "cli"]
 description = "A program to convert triangle meshes to voxels."
 license = "Unlicense"
 
 [dependencies]
-image = {version = "0.25.1"}
-gltf = {version = "1.4.0", default-features = false, features = ["import", "utils", "KHR_materials_pbrSpecularGlossiness"]}
+image = { version = "0.25.1" }
+gltf = { version = "1.4.1", default-features = false, features = [
+    "import",
+    "utils",
+    "KHR_materials_pbrSpecularGlossiness",
+] }
 vox_writer = "0.1.9"
-json = {version = "0.12.4", default-features = false}
-
-nalgebra = {version = "0.32.0"}
-nalgebra-glm  = {version = "0.18.0"}
-clap = {version = "4.5.4", features = ["derive"]}
-
+json = { version = "0.12.4", default-features = false }
+clap = { version = "4.5.4", features = ["derive"] }
+glam = { version = "0.30.9", features = ["bytemuck"] }
+bytemuck = "1.24.0"
+anyhow = "1.0.100"
+rayon = "1.11.0"
+profiling = { version = "1.0.17", features = ["profile-with-tracy"] }
+tracy-client = "0.18.2"

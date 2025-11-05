@@ -3,3 +3,4 @@
 /target
 /data
 Cargo.lock
+.DS_Store
