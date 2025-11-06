@@ -236,8 +236,8 @@ impl Octree {
 
             chunks.entry(chunk).or_default().push(dot_vox::Voxel {
                 x: local_coords.x,
-                y: local_coords.y,
-                z: local_coords.z,
+                y: local_coords.z,
+                z: local_coords.y,
                 i: color_idx,
             });
         }
@@ -247,9 +247,9 @@ impl Octree {
         for index in 0..u8::MAX {
             let color = magica::decode(index);
             palette.push(dot_vox::Color {
-                r: color.0[2],
+                r: color.0[0],
                 g: color.0[1],
-                b: color.0[0],
+                b: color.0[2],
                 a: 255,
             });
         }
@@ -294,8 +294,8 @@ impl Octree {
                         format!(
                             "{} {} {}",
                             chunk.x * CHUNK_SIZE,
-                            chunk.y * CHUNK_SIZE,
-                            chunk.z * CHUNK_SIZE
+                            chunk.z * CHUNK_SIZE,
+                            chunk.y * CHUNK_SIZE
                         ),
                     )]
                     .into(),

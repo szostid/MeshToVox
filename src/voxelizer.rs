@@ -48,14 +48,17 @@ fn voxelize_line(store: &mut Octree, shading: &Shading, p1: Vec3, p2: Vec3) {
         return;
     }
 
+    let inv_dir = Vec3::ONE / ray_dir;
+
     let mut map_pos = ray_pos.floor().as_ivec3();
 
-    let t_delta = (Vec3::ONE / ray_dir).abs();
+    let t_delta = inv_dir.abs();
     let step = ray_dir.signum().as_ivec3();
 
-    let mut t_max = (ray_dir).signum() * (map_pos.as_vec3() - ray_pos);
+    let step_clamped = step.max(IVec3::ZERO);
+    let next_pos = (map_pos + step_clamped).as_vec3();
 
-    t_max = (t_max + (ray_dir.signum() * 0.5f32) + Vec3::splat(0.5)) * t_delta;
+    let mut t_max = (next_pos - ray_pos) * inv_dir;
 
     loop {
         let color = shading.get_color(map_pos);
@@ -149,7 +152,10 @@ pub fn voxelize(mesh: &Mesh, size: u32, mode: VoxelizationMode) -> Octree {
             .map(|vertex| vertex + Vec3::ONE);
 
         let mat_id = mesh.triangle_extras[tri][0].material_idx;
-        let material = &mesh.materials[mat_id as usize];
+        let material = mesh
+            .materials
+            .get(mat_id as usize)
+            .unwrap_or(&mesh.materials[0]);
 
         let shading = match material {
             ImageOrColor::Image(image) => {

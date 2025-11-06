@@ -494,48 +494,6 @@ impl Octree {
         output
     }
 
-    pub fn with_capacity(depth: u32, capacity: usize) -> Self {
-        let mut output = Self {
-            depth,
-            data: Vec::with_capacity(capacity),
-        };
-        output.create_new_oct(0);
-
-        output
-    }
-
-    pub fn save_to_file(&self, fname: &str) -> Result<()> {
-        let mut file = std::fs::File::create(fname)?;
-
-        file.write_all(&self.depth.to_le_bytes())?;
-        file.write_all(&(self.data.len() as u64).to_le_bytes())?;
-        file.write_all(bytemuck::cast_slice(&self.data))?;
-
-        Ok(())
-    }
-
-    pub fn load_from_file(fname: &str) -> Result<Self> {
-        let mut file = std::fs::File::open(fname).unwrap();
-
-        let mut octree_depth = [0_u8; 4];
-
-        file.read_exact(&mut octree_depth)?;
-
-        let depth = u32::from_le_bytes(octree_depth);
-
-        let mut size = [0_u8; 8];
-
-        file.read_exact(&mut size)?;
-
-        let octree_size = u64::from_le_bytes(size).try_into().unwrap();
-
-        let mut data = vec![0_u32; octree_size];
-
-        file.read_exact(bytemuck::cast_slice_mut(&mut data))?;
-
-        Ok(Self { depth, data })
-    }
-
     pub fn create_new_oct(&mut self, mut header: u32) -> usize {
         self.data.reserve(9);
         let old_len = self.data.len();

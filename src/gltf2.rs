@@ -31,68 +31,56 @@ impl AccessorComponentType for f32 {
 }
 
 #[profiling::function]
-fn convert_image(data: &gltf::image::Data) -> image::RgbImage {
-    println!(
-        "{:?}, {}, {}, pixels: {}",
-        data.format,
-        data.width,
-        data.height,
-        data.pixels.len()
-    );
+fn convert_image(data: &gltf::image::Data) -> Result<image::RgbImage> {
     match data.format {
         gltf::image::Format::R32G32B32FLOAT => {
             let pixels: &[f32] = bytemuck::cast_slice(&data.pixels);
-            let image =
-                ImageBuffer::<Rgb<f32>, _>::from_raw(data.width, data.height, pixels.to_vec())
-                    .expect("Invalid image dimensions");
 
-            image.convert()
+            ImageBuffer::<Rgb<f32>, _>::from_raw(data.width, data.height, pixels.to_vec())
+                .context("image has invalid dimensions")
+                .map(|img| img.convert())
         }
 
         gltf::image::Format::R16G16B16 => {
             let pixels: &[u16] = bytemuck::cast_slice(&data.pixels);
 
             ImageBuffer::<Rgb<u16>, _>::from_raw(data.width, data.height, pixels.to_vec())
-                .expect("Invalid image dimensions")
-                .convert()
+                .context("image has invalid dimensions")
+                .map(|img| img.convert())
         }
 
         gltf::image::Format::R8G8B8 => {
             let pixels = data.pixels.clone();
+
             ImageBuffer::<Rgb<u8>, _>::from_raw(data.width, data.height, pixels)
-                .expect("Invalid image dimensions")
+                .context("image has invalid dimensions")
         }
 
         gltf::image::Format::R32G32B32A32FLOAT => {
             let pixels: &[f32] = bytemuck::cast_slice(&data.pixels);
 
             ImageBuffer::<Rgba<f32>, _>::from_raw(data.width, data.height, pixels.to_vec())
-                .expect("Invalid image dimensions")
-                .convert()
+                .context("image has invalid dimensions")
+                .map(|img| img.convert())
         }
 
         gltf::image::Format::R16G16B16A16 => {
             let pixels: &[u16] = bytemuck::cast_slice(&data.pixels);
 
             ImageBuffer::<Rgba<u16>, _>::from_raw(data.width, data.height, pixels.to_vec())
-                .expect("Invalid image dimensions")
-                .convert()
+                .context("image has invalid dimensions")
+                .map(|img| img.convert())
         }
 
         gltf::image::Format::R8G8B8A8 => {
-            let mut pixels = data.pixels.clone();
-
-            for pixel in pixels.chunks_exact_mut(4) {
-                let [r, b] = pixel.get_disjoint_mut([0, 2]).unwrap();
-                std::mem::swap(r, b);
-            }
+            let pixels = data.pixels.clone();
 
             ImageBuffer::<Rgba<u8>, _>::from_raw(data.width, data.height, pixels)
-                .expect("Invalid image dimensions")
-                .convert()
+                .context("image has invalid dimensions")
+                .map(|img| img.convert())
         }
 
-        _ => unimplemented!("Unsupported format {:?}", data.format),
+        _ => bail!("format {:?} is unsupported", data.format),
     }
 }
 
@@ -119,7 +107,7 @@ fn parse_image(
                 .get(texture.index())
                 .context("failed to fetch image data (index is out of bounds)")?;
 
-            convert_image(image)
+            convert_image(image).context("failed to convert image")?
         }
     };
 
@@ -324,7 +312,7 @@ pub fn load_gltf(path: &str) -> Result<Mesh> {
         .context("failed to parse materials")?;
 
     // i.e. default material
-    materials.push(ImageOrColor::Color([0, 0, 0]));
+    materials.push(ImageOrColor::Color([255, 255, 255]));
 
     let mut bounds = BoundingBox::max();
 
