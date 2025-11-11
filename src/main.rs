@@ -68,7 +68,7 @@ fn voxelize_mesh(args: &Args) -> Result<()> {
             data.save_as_gltf(&args.output, mesh.view, args.sparse, args.dim, true)?;
         }
         OutputType::MagicaVoxel => {
-            data.save_as_magica_voxel(&args.output, args.dim)?;
+            data.save_as_magica_voxel(&args.output)?;
         }
     }
 

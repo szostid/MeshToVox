@@ -2,10 +2,9 @@
 name = "mesh_to_vox"
 version = "0.1.1"
 edition = "2024"
-repository = "https://github.com/noahbadoa/MeshToVox"
+repository = "https://github.com/szostid/MeshToVox"
 keywords = ["glTF", "3D", "cli"]
 description = "A program to convert triangle meshes to voxels."
-license = "Unlicense"
 
 [dependencies]
 image = { version = "0.25.1" }

@@ -217,7 +217,7 @@ mod magica {
 }
 
 impl Octree {
-    pub fn save_as_magica_voxel(&self, file_path: &str, size: u32) -> Result<()> {
+    pub fn save_as_magica_voxel(&self, file_path: &str) -> Result<()> {
         use dot_vox::*;
 
         const CHUNK_SIZE: i32 = 256;
