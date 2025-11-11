@@ -1,3 +1,5 @@
+#![warn(clippy::nursery)]
+#![warn(clippy::pedantic)]
 pub mod gltf2;
 pub mod io;
 pub mod math;
@@ -94,6 +96,7 @@ struct Args {
     #[arg(short, long)]
     output: String,
 
+    /// The resolution of the output model
     #[arg(long, default_value_t = 1022)]
     dim: u32,
 

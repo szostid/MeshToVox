@@ -1,24 +1,18 @@
 # MeshToVox
 A Command line ultility to convert triangle meshes into voxels.
 
-## Cli Usage
-Program Arguments:
-    * `--f string <input path>`: **(required)** Supported Formats : glb/gltf\
-    * `--o string <output path>`:  **(required)** Supported Formats : .gltf, .vox\
-    * `--dim int <size of voxel grid>`:  **(default: 1022)**\
-    * `--timer bool`:  **(default: false)** Outputs profiling imformation\
-    * `--sparse bool`:  **(default: true)** Removes non visible voxel faces ie inside of a sphere. Compatible with all meshes. Ignored for vox file format. Significantly reduces file size but takes more time and memory.
+The utility supports loading `.gltf`/`.glb` files and outputting `.gltf` (untested) and `.vox` files
+
+## CLI Usage
+Usage: `mesh_to_vox [OPTIONS] --input <INPUT> --output <OUTPUT>`
+
+Options:
+  `-i, --input <INPUT>`    The input file that will be voxelized
+  `-o, --output <OUTPUT>`  The output file after voxelization
+      `--dim <DIM>`        The resolution of the output model [default: 1022]
+      `--sparse <SPARSE>`  [default: true] [possible values: true, false]
+  `-h, --help`             Print help
+  `-V, --version`          Print version
 
 ## Installation
-[Cargo](https://www.rust-lang.org/tools/install 'Cargo') is requried for installation.\
-You can either install with `cargo install mesh_to_vox`. Or clone the repo and run with `cargo run --release -- (your argument)`
-
-## Examples:
-`cargo install mesh_to_vox;
-mesh_to_vox --f data/original/person.glb --o data/test_gltf/test.gltf --dim 2048 --sparse true`
-<img src="images/Example.png" alt="example"/>
-
-## Todo
- * Multi-Threading / Gpu support
- * Directed cycle graph output format
- * Normals
+[Cargo](https://www.rust-lang.org/tools/install 'Cargo') is requried for installation. Clone the repo and run with `cargo run --release -- (your argument)`

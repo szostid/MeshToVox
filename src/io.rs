@@ -9,15 +9,14 @@ use bytemuck::Zeroable;
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
 pub struct Vertex {
     pub position: Vec3,
-    pub color: [u8; 3],
-    pub _p: u8,
+    pub color: [u8; 4],
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Zeroable, Pod)]
 pub struct FloatVertex {
     pub position: Vec3,
-    pub color: [f32; 3],
+    pub color: [f32; 4],
 }
 
 impl From<Vertex> for FloatVertex {
@@ -63,8 +62,8 @@ impl VertexExtras {
 
 #[derive(Debug, Clone)]
 pub enum ImageOrColor {
-    Image(image::RgbImage),
-    Color([u8; 3]),
+    Image(image::RgbaImage),
+    Color(image::Rgba<u8>),
 }
 
 #[derive(Debug, Clone)]
@@ -183,12 +182,12 @@ pub fn mpv_to_json(mvp: &Mat4) -> json::JsonValue {
 }
 
 mod magica {
-    pub const fn encode(color: image::Rgb<u8>) -> u8 {
+    pub const fn encode(color: image::Rgba<u8>) -> u8 {
         let color = color.0;
         (color[0] >> 5) | ((color[1] >> 5) << 3) | ((color[2] >> 6) << 6)
     }
 
-    pub const fn decode(byte: u8) -> image::Rgb<u8> {
+    pub const fn decode(byte: u8) -> image::Rgba<u8> {
         let mask3 = (1 << 3) - 1;
         let mask2 = (1 << 2) - 1;
 
@@ -196,7 +195,7 @@ mod magica {
         let g = ((byte >> 3) & mask3) << 5;
         let b = ((byte >> 6) & mask2) << 6;
 
-        image::Rgb([r, g, b])
+        image::Rgba([r, g, b, 255])
     }
 
     #[cfg(test)]
@@ -227,6 +226,21 @@ impl Octree {
 
         let mut chunks = HashMap::<IVec3, Vec<dot_vox::Voxel>>::new();
 
+        // the palette starts at index 1 and ends later because magicavoxel only allows for 254
+        // indices and reserves the first index for a black color. we can therefore skip the black
+        // color
+        let mut palette = Vec::with_capacity(256);
+
+        for index in 1..=255 {
+            let color = magica::decode(index);
+            palette.push(dot_vox::Color {
+                r: color.0[0],
+                g: color.0[1],
+                b: color.0[2],
+                a: 255,
+            });
+        }
+
         for (coords, color) in nodes {
             let color = octree_header::to_color(color);
             let color_idx = magica::encode(color);
@@ -238,19 +252,11 @@ impl Octree {
                 x: local_coords.x,
                 y: local_coords.z,
                 z: local_coords.y,
-                i: color_idx,
-            });
-        }
-
-        let mut palette = Vec::with_capacity(256);
-
-        for index in 0..u8::MAX {
-            let color = magica::decode(index);
-            palette.push(dot_vox::Color {
-                r: color.0[0],
-                g: color.0[1],
-                b: color.0[2],
-                a: 255,
+                // as said previously, the palette starts at index 1, and dot_vox
+                // will offset this index by adding one to it. we want black indices
+                // to be `0` after this operation, so they have to be `255` before
+                // this operation, we can perform a wrapping subtraction to achieve that
+                i: color_idx.wrapping_sub(1),
             });
         }
 
@@ -368,11 +374,7 @@ impl Octree {
                             ((vert + IVec3::NEG_ONE).as_dvec3() / max_size as f64).as_vec3();
                         let position = position.mul_add(Vec3::splat(2.0), Vec3::NEG_ONE);
 
-                        Vertex {
-                            position,
-                            color,
-                            _p: 0,
-                        }
+                        Vertex { position, color }
                     });
 
                     for vert in verts {

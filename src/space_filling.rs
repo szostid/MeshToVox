@@ -44,13 +44,13 @@ impl MeshNode {
 
         let mut opposite = base;
         if self.dim != 0 {
-            opposite.x += size
+            opposite.x += size;
         }
         if self.dim != 1 {
-            opposite.y += size
+            opposite.y += size;
         }
         if self.dim != 2 {
-            opposite.z += size
+            opposite.z += size;
         }
 
         [base, opposite]
@@ -62,16 +62,16 @@ impl MeshNode {
 
         let mut corner1 = base;
         if self.dim != 0 {
-            corner1.x += size
+            corner1.x += size;
         } else if self.dim != 1 {
-            corner1.y += size
+            corner1.y += size;
         }
 
         let mut corner2 = base;
         if self.dim != 2 {
-            corner2.z += size
+            corner2.z += size;
         } else if self.dim != 1 {
-            corner2.y += size
+            corner2.y += size;
         }
 
         [base, corner1, opposite, base, corner2, opposite]

@@ -31,7 +31,7 @@ impl AccessorComponentType for f32 {
 }
 
 #[profiling::function]
-fn convert_image(data: &gltf::image::Data) -> Result<image::RgbImage> {
+fn convert_image(data: &gltf::image::Data) -> Result<image::RgbaImage> {
     match data.format {
         gltf::image::Format::R32G32B32FLOAT => {
             let pixels: &[f32] = bytemuck::cast_slice(&data.pixels);
@@ -54,6 +54,7 @@ fn convert_image(data: &gltf::image::Data) -> Result<image::RgbImage> {
 
             ImageBuffer::<Rgb<u8>, _>::from_raw(data.width, data.height, pixels)
                 .context("image has invalid dimensions")
+                .map(|img| img.convert())
         }
 
         gltf::image::Format::R32G32B32A32FLOAT => {
@@ -77,7 +78,6 @@ fn convert_image(data: &gltf::image::Data) -> Result<image::RgbImage> {
 
             ImageBuffer::<Rgba<u8>, _>::from_raw(data.width, data.height, pixels)
                 .context("image has invalid dimensions")
-                .map(|img| img.convert())
         }
 
         _ => bail!("format {:?} is unsupported", data.format),
@@ -89,17 +89,16 @@ fn parse_image(
     image_data: &[gltf::image::Data],
     texture: gltf::Texture,
     source_dir: &str,
-) -> Result<image::RgbImage> {
+) -> Result<image::RgbaImage> {
     let source = texture.source().source();
 
-    let data = match source {
+    match source {
         gltf::image::Source::Uri { uri, .. } => {
             let path = format!("{source_dir}/{uri}");
 
-            let image = image::open(path.as_str())
-                .with_context(|| format!("failed to fetch file `{path}` used by the mesh"))?;
-
-            image.into_rgb8()
+            image::open(path.as_str())
+                .with_context(|| format!("failed to fetch file `{path}` used by the mesh"))
+                .map(|img| img.into_rgba8())
         }
 
         gltf::image::Source::View { .. } => {
@@ -107,11 +106,9 @@ fn parse_image(
                 .get(texture.index())
                 .context("failed to fetch image data (index is out of bounds)")?;
 
-            convert_image(image).context("failed to convert image")?
+            convert_image(image).context("failed to convert image")
         }
-    };
-
-    Ok(data)
+    }
 }
 
 #[profiling::function]
@@ -151,11 +148,12 @@ fn parse_material(
 
     let base_color = mat.pbr_metallic_roughness().base_color_factor();
 
-    let base_color = [
+    let base_color = image::Rgba([
         (base_color[0] * 255.0) as u8,
         (base_color[1] * 255.0) as u8,
         (base_color[2] * 255.0) as u8,
-    ];
+        (base_color[3] * 255.0) as u8,
+    ]);
 
     Ok(ImageOrColor::Color(base_color))
 }
@@ -312,7 +310,7 @@ pub fn load_gltf(path: &str) -> Result<Mesh> {
         .context("failed to parse materials")?;
 
     // i.e. default material
-    materials.push(ImageOrColor::Color([255, 255, 255]));
+    materials.push(ImageOrColor::Color(image::Rgba([255, 255, 255, 255])));
 
     let mut bounds = BoundingBox::max();
 

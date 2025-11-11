@@ -63,7 +63,10 @@ fn voxelize_line(store: &mut Octree, shading: &Shading, p1: Vec3, p2: Vec3) {
     loop {
         let color = shading.get_color(map_pos);
 
-        store.store(map_pos, color);
+        // alpha cutoff
+        if color.0[3] > 128 {
+            store.store(map_pos, color);
+        }
 
         if map_pos == end {
             break;
@@ -78,7 +81,7 @@ fn voxelize_line(store: &mut Octree, shading: &Shading, p1: Vec3, p2: Vec3) {
 
 #[derive(Debug)]
 struct TexturedShading<'a> {
-    pub image: &'a image::RgbImage,
+    pub image: &'a image::RgbaImage,
     pub vertices: [Vec3; 3],
     pub uvs: [Vec2; 3],
 }
@@ -86,11 +89,11 @@ struct TexturedShading<'a> {
 #[derive(Debug)]
 enum Shading<'a> {
     Texture(TexturedShading<'a>),
-    Color([u8; 3]),
+    Color(image::Rgba<u8>),
 }
 
 impl Shading<'_> {
-    pub fn get_color(&self, map_pos: IVec3) -> image::Rgb<u8> {
+    pub fn get_color(&self, map_pos: IVec3) -> image::Rgba<u8> {
         match self {
             Shading::Texture(texture) => {
                 let point = closest_point_triangle(map_pos.as_vec3(), texture.vertices);
@@ -111,7 +114,7 @@ impl Shading<'_> {
                 *texture.image.get_pixel(x, y)
             }
 
-            Shading::Color(color) => image::Rgb(*color),
+            Shading::Color(color) => *color,
         }
     }
 }
@@ -125,7 +128,7 @@ pub enum VoxelizationMode {
 
 pub fn voxelize_point(store: &mut Octree, point: Vec3) {
     let point = point.round().as_ivec3();
-    store.store(point, image::Rgb([32, 32, 32]))
+    store.store(point, image::Rgba([32, 32, 32, 255]));
 }
 
 #[profiling::function]

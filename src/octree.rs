@@ -1,9 +1,7 @@
 use crate::io::Vertex;
 use crate::space_filling::*;
-use anyhow::*;
 use glam::*;
 use std::collections::HashSet;
-use std::io::{Read, Write};
 
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 pub struct OctreePos {
@@ -65,7 +63,7 @@ impl Octree {
         get_octree_idx(cords, depth)
     }
 
-    pub fn store(&mut self, position: IVec3, val: image::Rgb<u8>) {
+    pub fn store(&mut self, position: IVec3, val: image::Rgba<u8>) {
         let node = OctreePos {
             coords: position,
             depth: self.depth,
@@ -130,11 +128,7 @@ impl Octree {
                 let mapping = |x: IVec3| {
                     let position = (x + IVec3::NEG_ONE).as_vec3() / max_size as f32;
                     let position = position.mul_add(Vec3::splat(2.0), Vec3::NEG_ONE);
-                    Vertex {
-                        position,
-                        color,
-                        _p: 0,
-                    }
+                    Vertex { position, color }
                 };
 
                 let a = <[_; 3]>::try_from(&triangles[0..3]).unwrap().map(mapping);
@@ -320,8 +314,8 @@ impl Octree {
         }
     }
 
-    fn empty_to_mesh(filled: &Self, empty: &Self) -> Vec<(MeshNode, image::Rgb<u8>)> {
-        let mut mesh: Vec<(MeshNode, image::Rgb<u8>)> = Vec::new();
+    fn empty_to_mesh(filled: &Self, empty: &Self) -> Vec<(MeshNode, image::Rgba<u8>)> {
+        let mut mesh = Vec::new();
 
         let nodes = filled.collect_nodes();
         let max_size = 1 << (filled.depth + 1);
@@ -386,14 +380,14 @@ pub mod octree_header {
     pub const COLOR_TAG: u8 = 118;
     pub const HEADER_TAG: u8 = 68;
 
-    pub const fn from_color(color: image::Rgb<u8>) -> u32 {
-        let bytes = color.0;
-        u32::from_le_bytes([bytes[0], bytes[1], bytes[2], 0])
+    pub const fn from_color(color: image::Rgba<u8>) -> u32 {
+        let [r, g, b, a] = color.0;
+        u32::from_le_bytes([r, g, b, a])
     }
 
-    pub const fn to_color(offset: u32) -> image::Rgb<u8> {
-        let bytes = offset.to_le_bytes();
-        image::Rgb([bytes[0], bytes[1], bytes[2]])
+    pub const fn to_color(offset: u32) -> image::Rgba<u8> {
+        let [r, g, b, a] = offset.to_le_bytes();
+        image::Rgba([r, g, b, a])
     }
 
     pub const fn get_empty(header: u32, idx: u32) -> bool {
@@ -559,7 +553,7 @@ impl Octree {
         }
     }
 
-    pub fn insert(&mut self, node: &OctreePos, value: image::Rgb<u8>) -> Option<u32> {
+    pub fn insert(&mut self, node: &OctreePos, value: image::Rgba<u8>) -> Option<u32> {
         if node.depth > self.depth {
             return None;
         }
