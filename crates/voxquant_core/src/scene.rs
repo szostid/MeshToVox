@@ -202,3 +202,36 @@ impl MaterialTexturing {
         }
     }
 }
+
+pub trait Interpolate: Sized {
+    #[must_use]
+    fn interpolate(data: [Self; 3], barycentrics: [f32; 3]) -> Self;
+}
+
+impl<T: Interpolate + Copy, const N: usize> Interpolate for [T; N] {
+    #[inline]
+    fn interpolate(data: [Self; 3], bary: [f32; 3]) -> Self {
+        std::array::from_fn(|i| T::interpolate([data[0][i], data[1][i], data[2][i]], bary))
+    }
+}
+
+impl Interpolate for f32 {
+    #[inline]
+    fn interpolate(data: [f32; 3], bary: [f32; 3]) -> Self {
+        data[0] * bary[0] + data[1] * bary[1] + data[2] * bary[2]
+    }
+}
+
+impl Interpolate for u8 {
+    #[inline]
+    fn interpolate(data: [u8; 3], bary: [f32; 3]) -> u8 {
+        let float_data = [data[0] as f32, data[1] as f32, data[2] as f32];
+
+        f32::interpolate(float_data, bary).clamp(0.0, 255.0) as u8
+    }
+}
+
+pub struct Channel<'a, T: Interpolate> {
+    vert_colors: [T; 3],
+    albedo_texture: Option<TriangleTextureData<'a>>,
+}

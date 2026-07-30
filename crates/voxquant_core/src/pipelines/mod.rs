@@ -2,6 +2,8 @@ use crate::scene::Triangle;
 
 pub mod pbrless;
 
+pub mod pbr;
+
 /// Represents a vertex of a pipeline.
 ///
 /// Needs to store a position.
