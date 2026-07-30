@@ -444,3 +444,36 @@ impl<P: GltfPipeline> InputFormat<P> for Gltf {
         load_gltf(reader, root_transform)
     }
 }
+
+struct GltfTexturingExtras {
+    tex_coord: u32,
+}
+
+fn get_texture_data(
+    texture_info: &gltf::texture::Info<'_>,
+    image_data: &[Arc<RgbaImage>],
+) -> Result<(MaterialTexturing, GltfTexturingExtras)> {
+    const fn into_voxelization_mode(value: gltf::texture::WrappingMode) -> WrapMode {
+        match value {
+            gltf::texture::WrappingMode::ClampToEdge => WrapMode::ClampToEdge,
+            gltf::texture::WrappingMode::MirroredRepeat => WrapMode::MirroredRepeat,
+            gltf::texture::WrappingMode::Repeat => WrapMode::Repeat,
+        }
+    }
+
+    let texture_index = texture_info.texture().source().index();
+    let texture = image_data.get(texture_index).ok_or(Error::OutOfBounds)?;
+
+    Ok((
+        MaterialTexturing {
+            texture: Arc::clone(texture),
+            wrap_mode: [
+                into_voxelization_mode(texture_info.texture().sampler().wrap_s()),
+                into_voxelization_mode(texture_info.texture().sampler().wrap_t()),
+            ],
+        },
+        GltfTexturingExtras {
+            tex_coord: texture_info.tex_coord(),
+        },
+    ))
+}

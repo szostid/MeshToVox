@@ -1,5 +1,6 @@
 //! `glTF 2.0` input support for [`voxquant_core`] through the [`gltf`](https://docs.rs/gltf/latest/gltf/) crate
 use crate::{Error, GltfPipeline, Result};
+use crate::{GltfTexturingExtras, get_texture_data};
 use image::RgbaImage;
 use std::sync::Arc;
 use voxquant_core::pipelines::pbrless;
@@ -85,10 +86,6 @@ impl GltfPipeline for pbrless::Pipeline {
     }
 }
 
-struct GltfTexturingExtras {
-    tex_coord: u32,
-}
-
 pub struct GltfMaterialExtras {
     /// If the material has some [`texturing`](Material::texturing),
     /// this will contain the texturing extras
@@ -99,53 +96,20 @@ fn get_material_texture_data(
     mat: &gltf::Material,
     image_data: &[Arc<RgbaImage>],
 ) -> Result<Option<(MaterialTexturing, GltfTexturingExtras)>> {
-    fn with_material_texture<R>(
-        mat: &gltf::Material,
-        f: impl FnOnce(gltf::texture::Info<'_>) -> R,
-    ) -> Option<R> {
-        if let Some(info) = mat.emissive_texture() {
-            return Some(f(info));
-        }
-
-        if let Some(info) = mat.pbr_metallic_roughness().base_color_texture() {
-            return Some(f(info));
-        }
-
-        if let Some(info) = mat
-            .pbr_specular_glossiness()
-            .and_then(|spectral| spectral.diffuse_texture())
-        {
-            return Some(f(info));
-        }
-
-        None
+    if let Some(info) = mat.emissive_texture() {
+        return get_texture_data(&info, image_data).map(Some);
     }
 
-    const fn into_voxelization_mode(value: gltf::texture::WrappingMode) -> WrapMode {
-        match value {
-            gltf::texture::WrappingMode::ClampToEdge => WrapMode::ClampToEdge,
-            gltf::texture::WrappingMode::MirroredRepeat => WrapMode::MirroredRepeat,
-            gltf::texture::WrappingMode::Repeat => WrapMode::Repeat,
-        }
+    if let Some(info) = mat.pbr_metallic_roughness().base_color_texture() {
+        return get_texture_data(&info, image_data).map(Some);
     }
 
-    with_material_texture(mat, |texture_info| {
-        let texture_index = texture_info.texture().source().index();
+    if let Some(info) = mat
+        .pbr_specular_glossiness()
+        .and_then(|spectral| spectral.diffuse_texture())
+    {
+        return get_texture_data(&info, image_data).map(Some);
+    }
 
-        let texture = image_data.get(texture_index).ok_or(Error::OutOfBounds)?;
-
-        Ok((
-            MaterialTexturing {
-                texture: Arc::clone(texture),
-                wrap_mode: [
-                    into_voxelization_mode(texture_info.texture().sampler().wrap_s()),
-                    into_voxelization_mode(texture_info.texture().sampler().wrap_t()),
-                ],
-            },
-            GltfTexturingExtras {
-                tex_coord: texture_info.tex_coord(),
-            },
-        ))
-    })
-    .map_or(Ok(None), |f| f.map(Some))
+    Ok(None)
 }
