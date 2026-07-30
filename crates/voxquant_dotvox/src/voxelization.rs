@@ -1,8 +1,9 @@
 use glam::{IVec3, U8Vec3, Vec3};
 use std::collections::HashMap;
 use std::ops::Range;
-use voxquant_core::scene::Scene;
-use voxquant_core::voxelizer::{SceneSlice, VoxelStore, VoxelizationMode};
+use voxquant_core::pipelines::pbrless;
+use voxquant_core::scene::{Scene, SceneSlice};
+use voxquant_core::voxelizer::{VoxelStore, VoxelizationMode};
 
 pub trait VoxelType: Clone + Copy + PartialEq + Eq + Send + Sync + 'static {
     fn from_pos_color(pos: U8Vec3, color: [u8; 4]) -> Self;
@@ -38,12 +39,12 @@ impl<T: VoxelType> Chunk<T> {
     }
 }
 
-impl<T: VoxelType> VoxelStore for Chunk<T> {
-    fn add_voxel(&mut self, position: [i32; 3], color: [u8; 4], _is_emissive: bool) {
+impl<T: VoxelType> VoxelStore<pbrless::Voxel> for Chunk<T> {
+    fn add_voxel(&mut self, position: [i32; 3], data: pbrless::Voxel) {
         let pos_in_chunk = IVec3::from_array(position) - self.origin;
 
         if let Ok(local) = U8Vec3::try_from(pos_in_chunk) {
-            self.voxels.push(T::from_pos_color(local, color));
+            self.voxels.push(T::from_pos_color(local, data.color));
         }
     }
 }
@@ -53,7 +54,7 @@ impl<T: VoxelType> VoxelStore for Chunk<T> {
 /// This is used to paralellize the voxelization (each chunk can be voxelized
 /// independenty; we can use [`SceneSlice`])
 #[profiling::function]
-fn group_triangles(scene: &Scene, size: u32) -> HashMap<IVec3, Vec<usize>> {
+fn group_triangles(scene: &Scene<pbrless::Pipeline>, size: u32) -> HashMap<IVec3, Vec<usize>> {
     let mut chunks = HashMap::<IVec3, Vec<usize>>::new();
 
     let largest_dim = Vec3::from_array(scene.bounds.size()).max_element();
@@ -85,7 +86,7 @@ fn group_triangles(scene: &Scene, size: u32) -> HashMap<IVec3, Vec<usize>> {
 
 #[profiling::function]
 pub fn voxelize<T: VoxelType>(
-    scene: &Scene,
+    scene: &Scene<pbrless::Pipeline>,
     size: u32,
     mode: VoxelizationMode,
     optimize: bool,

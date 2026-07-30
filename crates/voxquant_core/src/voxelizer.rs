@@ -1,8 +1,7 @@
 //! Core voxelization algorithms and storage traits.
 use crate::pipelines::{VertexData, VoxelPipeline};
-use crate::scene::{BoundingBox, Scene, SceneSlice, Triangle, WrapMode};
-use glam::{IVec3, Vec2, Vec3, Vec4};
-use image::RgbaImage;
+use crate::scene::{SceneSlice, Triangle};
+use glam::{IVec3, Vec2, Vec3};
 use std::fmt;
 use std::ops::Range;
 
@@ -271,7 +270,7 @@ fn voxelize_line<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
 
     for _ in 0..max_steps {
         let bary = interpolator.get_closest_barycentric(voxel_pos.as_vec3());
-        let color = P::sample_from_bary(&shading, bary);
+        let color = P::sample_from_bary(shading, bary);
 
         if let Some(color) = color {
             store.add_voxel(voxel_pos.to_array(), color);
@@ -315,7 +314,7 @@ fn voxelize_points<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct TriangleInterpolator {
+struct TriangleInterpolator {
     /// `a`
     a: Vec3,
 

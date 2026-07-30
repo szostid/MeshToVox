@@ -3,6 +3,7 @@ use glam::Vec3;
 use std::fmt;
 use std::io;
 use voxquant_core::io::SceneWriter;
+use voxquant_core::pipelines::pbrless;
 use voxquant_core::scene::Scene;
 use voxquant_core::{Format, OutputFormat, VoxelizationConfig};
 
@@ -36,7 +37,7 @@ impl fmt::Display for ColorMode {
 
 #[profiling::function]
 fn voxelize_and_write(
-    scene: Scene,
+    scene: Scene<pbrless::Pipeline>,
     format_config: &DotVoxConfig,
     voxelization_config: &VoxelizationConfig,
     output: impl SceneWriter,
@@ -112,12 +113,12 @@ impl Format for DotVox {
     ];
 }
 
-impl OutputFormat for DotVox {
+impl OutputFormat<pbrless::Pipeline> for DotVox {
     type Config = DotVoxConfig;
     type Error = io::Error;
 
     fn voxelize_and_write<W: SceneWriter>(
-        scene: Scene,
+        scene: Scene<pbrless::Pipeline>,
         output: W,
         format_config: Self::Config,
         voxelization_config: &VoxelizationConfig,

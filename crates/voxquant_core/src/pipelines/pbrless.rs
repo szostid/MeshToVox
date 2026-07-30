@@ -5,6 +5,11 @@ use std::sync::Arc;
 
 pub use image::RgbaImage;
 
+#[derive(Clone, Copy)]
+pub struct Voxel {
+    pub color: [u8; 4],
+}
+
 /// A vertex with some associated color and UV (if present) data.
 #[derive(Debug, Clone, Copy)]
 pub struct Vertex {
@@ -116,7 +121,7 @@ impl TriangleData<'_> {
 
     #[inline]
     #[must_use]
-    pub fn sample_from_bary(&self, mut bary: Vec3) -> Option<[u8; 4]> {
+    pub fn sample_from_bary(&self, mut bary: Vec3) -> Option<Voxel> {
         bary = bary.max(Vec3::ZERO);
 
         let sum = bary.x + bary.y + bary.z;
@@ -156,16 +161,16 @@ impl TriangleData<'_> {
             return None;
         }
 
-        Some(color)
+        Some(Voxel { color })
     }
 }
 
-pub struct PbrlessPipeline;
+pub struct Pipeline;
 
-impl VoxelPipeline for PbrlessPipeline {
+impl VoxelPipeline for Pipeline {
     type Vertex = Vertex;
     type Material = Material;
-    type VoxelData = [u8; 4];
+    type VoxelData = Voxel;
 
     type TriangleData<'a> = TriangleData<'a>;
 
@@ -189,7 +194,7 @@ impl VoxelPipeline for PbrlessPipeline {
         }
     }
 
-    fn sample_from_bary(data: &Self::TriangleData<'_>, bary: Vec3) -> Option<[u8; 4]> {
+    fn sample_from_bary(data: &Self::TriangleData<'_>, bary: Vec3) -> Option<Voxel> {
         data.sample_from_bary(bary)
     }
 }

@@ -3,9 +3,10 @@ use glam::{Mat4, Vec3};
 use image::RgbaImage;
 use std::path::PathBuf;
 use std::sync::Arc;
-use voxquant_core::geometry::{BoundingBox, Triangle, Vertex};
 use voxquant_core::io::SceneReader;
-use voxquant_core::scene::{Material, MaterialTexturing, Scene, WrapMode};
+use voxquant_core::pipelines::pbrless;
+use voxquant_core::scene::{BoundingBox, Triangle};
+use voxquant_core::scene::{Scene, WrapMode};
 use voxquant_core::{Format, InputFormat};
 
 mod error;
@@ -109,7 +110,7 @@ fn parse_image(image_data: &[Arc<RgbaImage>], texture: gltf::Texture) -> Result<
 fn get_material_texture_data(
     mat: &gltf::Material,
     image_data: &[Arc<RgbaImage>],
-) -> Result<Option<(MaterialTexturing, GltfTexturingExtras)>> {
+) -> Result<Option<(pbrless::MaterialTexturing, GltfTexturingExtras)>> {
     fn with_material_texture<R>(
         mat: &gltf::Material,
         f: impl FnOnce(gltf::texture::Info<'_>) -> R,
@@ -146,7 +147,7 @@ fn get_material_texture_data(
         let texture = image_data.get(texture_index).ok_or(Error::OutOfBounds)?;
 
         Ok((
-            MaterialTexturing {
+            pbrless::MaterialTexturing {
                 texture: Arc::clone(texture),
                 wrap_mode: [
                     into_voxelization_mode(texture_info.texture().sampler().wrap_s()),
@@ -170,7 +171,7 @@ fn get_material_texture_data(
 fn parse_material(
     mat: &gltf::Material,
     image_data: &[Arc<RgbaImage>],
-) -> Result<(Material, GltfMaterialExtras)> {
+) -> Result<(pbrless::Material, GltfMaterialExtras)> {
     let alpha_threshold = match mat.alpha_mode() {
         gltf::material::AlphaMode::Opaque => None,
         gltf::material::AlphaMode::Mask => {
@@ -203,7 +204,7 @@ fn parse_material(
     };
 
     Ok((
-        Material {
+        pbrless::Material {
             texturing,
             alpha_threshold,
             base_color,
@@ -231,15 +232,15 @@ struct MeshScratch {
 fn parse_mesh_instance(
     instance: MeshInstance,
     bounds: &mut BoundingBox,
-    materials: &[Material],
+    materials: &[pbrless::Material],
     material_extras: &[GltfMaterialExtras],
     buffers: &[gltf::buffer::Data],
-    triangles: &mut Vec<Triangle>,
+    triangles: &mut Vec<Triangle<pbrless::Vertex>>,
     scratch: &mut MeshScratch,
 ) -> Result<()> {
     fn push_triangle(
         [i1, i2, i3]: [u32; 3],
-        triangles: &mut Vec<Triangle>,
+        triangles: &mut Vec<Triangle<pbrless::Vertex>>,
         scratch: &MeshScratch,
         material_index: u32,
     ) {
@@ -257,17 +258,17 @@ fn parse_mesh_instance(
 
         triangles.push(Triangle {
             vertices: [
-                Vertex::new(
+                pbrless::Vertex::new(
                     scratch.positions[i1],
                     scratch.uvs.get(i1).copied(),
                     scratch.colors.get(i1).copied(),
                 ),
-                Vertex::new(
+                pbrless::Vertex::new(
                     scratch.positions[i2],
                     scratch.uvs.get(i2).copied(),
                     scratch.colors.get(i2).copied(),
                 ),
-                Vertex::new(
+                pbrless::Vertex::new(
                     scratch.positions[i3],
                     scratch.uvs.get(i3).copied(),
                     scratch.colors.get(i3).copied(),
@@ -413,7 +414,7 @@ fn import_gltf(
 }
 
 #[profiling::function]
-fn load_gltf(reader: impl SceneReader, root_transform: Mat4) -> Result<Scene> {
+fn load_gltf(reader: impl SceneReader, root_transform: Mat4) -> Result<Scene<pbrless::Pipeline>> {
     let (document, buffers, images) = import_gltf(reader)?;
 
     let (mut materials, mut material_extras) = document
@@ -422,7 +423,7 @@ fn load_gltf(reader: impl SceneReader, root_transform: Mat4) -> Result<Scene> {
         .collect::<Result<(Vec<_>, Vec<_>)>>()?;
 
     // default fallback material
-    materials.push(Material {
+    materials.push(pbrless::Material {
         texturing: None,
         alpha_threshold: None,
         base_color: [255, 255, 255, 255],
@@ -503,7 +504,7 @@ impl Format for Gltf {
     ];
 }
 
-impl InputFormat for Gltf {
+impl InputFormat<pbrless::Pipeline> for Gltf {
     type Config = GltfConfig;
     type Error = Error;
 
@@ -511,7 +512,7 @@ impl InputFormat for Gltf {
         transform_matrix: [[f32; 4]; 4],
         reader: R,
         config: GltfConfig,
-    ) -> Result<Scene> {
+    ) -> Result<Scene<pbrless::Pipeline>> {
         let root_transform = Mat4::from_cols_array_2d(&transform_matrix)
             * Mat4::from_scale(Vec3::splat(config.base_scale));
 
