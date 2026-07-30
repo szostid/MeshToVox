@@ -1,11 +1,8 @@
 //! `glTF 2.0` input support for [`voxquant_core`] through the [`gltf`](https://docs.rs/gltf/latest/gltf/) crate
-use crate::{Error, GltfPipeline, Result};
-use crate::{GltfTexturingExtras, get_texture_data};
+use crate::{GltfPipeline, GltfTexturingExtras};
 use image::RgbaImage;
 use std::sync::Arc;
 use voxquant_core::pipelines::pbrless;
-use voxquant_core::scene::MaterialTexturing;
-use voxquant_core::scene::WrapMode;
 
 impl GltfPipeline for pbrless::Pipeline {
     type MaterialExtras = GltfMaterialExtras;
@@ -63,9 +60,19 @@ impl GltfPipeline for pbrless::Pipeline {
                 .map(|r| (r * 255.0) as u8)
         };
 
-        let (texturing, texturing_extras) = match get_material_texture_data(mat, image_data)? {
-            Some((texturing, extras)) => (Some(texturing), Some(extras)),
-            None => (None, None),
+        let albedo_info = mat
+            .pbr_metallic_roughness()
+            .base_color_texture()
+            .or_else(|| {
+                mat.pbr_specular_glossiness()
+                    .and_then(|spectral| spectral.diffuse_texture())
+            });
+
+        let (texturing, texturing_extras) = if let Some(info) = albedo_info {
+            let (tex, ext) = crate::get_texture_data(&info, image_data)?;
+            (Some(tex), Some(ext))
+        } else {
+            (None, None)
         };
 
         Ok((
@@ -90,26 +97,4 @@ pub struct GltfMaterialExtras {
     /// If the material has some [`texturing`](Material::texturing),
     /// this will contain the texturing extras
     texturing: Option<GltfTexturingExtras>,
-}
-
-fn get_material_texture_data(
-    mat: &gltf::Material,
-    image_data: &[Arc<RgbaImage>],
-) -> Result<Option<(MaterialTexturing, GltfTexturingExtras)>> {
-    if let Some(info) = mat.emissive_texture() {
-        return get_texture_data(&info, image_data).map(Some);
-    }
-
-    if let Some(info) = mat.pbr_metallic_roughness().base_color_texture() {
-        return get_texture_data(&info, image_data).map(Some);
-    }
-
-    if let Some(info) = mat
-        .pbr_specular_glossiness()
-        .and_then(|spectral| spectral.diffuse_texture())
-    {
-        return get_texture_data(&info, image_data).map(Some);
-    }
-
-    Ok(None)
 }

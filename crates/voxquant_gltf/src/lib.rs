@@ -126,10 +126,46 @@ fn parse_image(image_data: &[Arc<RgbaImage>], texture: gltf::Texture) -> Result<
     Ok(Arc::clone(image))
 }
 
+struct GltfTexturingExtras {
+    tex_coord: u32,
+}
+
+fn get_texture_data(
+    texture_info: &gltf::texture::Info<'_>,
+    image_data: &[Arc<RgbaImage>],
+) -> Result<(MaterialTexturing, GltfTexturingExtras)> {
+    const fn into_voxelization_mode(value: gltf::texture::WrappingMode) -> WrapMode {
+        match value {
+            gltf::texture::WrappingMode::ClampToEdge => WrapMode::ClampToEdge,
+            gltf::texture::WrappingMode::MirroredRepeat => WrapMode::MirroredRepeat,
+            gltf::texture::WrappingMode::Repeat => WrapMode::Repeat,
+        }
+    }
+
+    let texture_index = texture_info.texture().source().index();
+    let texture = image_data.get(texture_index).ok_or(Error::OutOfBounds)?;
+
+    Ok((
+        MaterialTexturing {
+            texture: Arc::clone(texture),
+            wrap_mode: [
+                into_voxelization_mode(texture_info.texture().sampler().wrap_s()),
+                into_voxelization_mode(texture_info.texture().sampler().wrap_t()),
+            ],
+        },
+        GltfTexturingExtras {
+            tex_coord: texture_info.tex_coord(),
+        },
+    ))
+}
+
 #[derive(Default)]
 struct MeshScratch {
     positions: Vec<[f32; 3]>,
-    normals: Vec<[f32; 3]>, // Added normals vector
+    /// Normals are stored even if the pipeline doesn't
+    /// [`GltfPipeline::USES_NORMALS`], but it will be
+    /// empty in that case
+    normals: Vec<[f32; 3]>,
     uvs: Vec<[f32; 2]>,
     colors: Vec<[u8; 4]>,
     indices: Vec<u32>,
@@ -196,8 +232,6 @@ fn parse_mesh_instance<P: GltfPipeline>(
         let reader = primitive.reader(|buffer| Some(&buffers[buffer.index()]));
         let material_idx = primitive.material().index().unwrap_or(materials.len() - 1);
 
-        let material = &materials[material_idx];
-
         let material_tex_coord = P::get_uv_channel(&material_extras[material_idx]);
 
         let positions = reader
@@ -229,10 +263,10 @@ fn parse_mesh_instance<P: GltfPipeline>(
         }
 
         scratch.normals.clear();
-        if P::USES_NORMALS {
-            if let Some(normal_iter) = reader.read_normals() {
-                scratch.normals.extend(normal_iter);
-            }
+        if P::USES_NORMALS
+            && let Some(normal_iter) = reader.read_normals()
+        {
+            scratch.normals.extend(normal_iter);
         }
 
         scratch.indices.clear();
@@ -443,37 +477,4 @@ impl<P: GltfPipeline> InputFormat<P> for Gltf {
 
         load_gltf(reader, root_transform)
     }
-}
-
-struct GltfTexturingExtras {
-    tex_coord: u32,
-}
-
-fn get_texture_data(
-    texture_info: &gltf::texture::Info<'_>,
-    image_data: &[Arc<RgbaImage>],
-) -> Result<(MaterialTexturing, GltfTexturingExtras)> {
-    const fn into_voxelization_mode(value: gltf::texture::WrappingMode) -> WrapMode {
-        match value {
-            gltf::texture::WrappingMode::ClampToEdge => WrapMode::ClampToEdge,
-            gltf::texture::WrappingMode::MirroredRepeat => WrapMode::MirroredRepeat,
-            gltf::texture::WrappingMode::Repeat => WrapMode::Repeat,
-        }
-    }
-
-    let texture_index = texture_info.texture().source().index();
-    let texture = image_data.get(texture_index).ok_or(Error::OutOfBounds)?;
-
-    Ok((
-        MaterialTexturing {
-            texture: Arc::clone(texture),
-            wrap_mode: [
-                into_voxelization_mode(texture_info.texture().sampler().wrap_s()),
-                into_voxelization_mode(texture_info.texture().sampler().wrap_t()),
-            ],
-        },
-        GltfTexturingExtras {
-            tex_coord: texture_info.tex_coord(),
-        },
-    ))
 }

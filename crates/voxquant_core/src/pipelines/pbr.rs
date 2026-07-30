@@ -1,3 +1,7 @@
+//! The PBR pipeline.
+//!
+//! Stores the metallic, roughness, normal and emissive data
+//! for every voxel apart from the usual color data.
 use crate::pipelines::{TriangleSampler, VertexData, VoxelPipeline};
 use crate::scene::Interpolate;
 use crate::scene::{MaterialTexturing, Triangle, TriangleTextureData};

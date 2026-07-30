@@ -1,3 +1,6 @@
+//! The PBR-less pipeline.
+//!
+//! Stores only a color per-voxel. No support for emission.
 use crate::pipelines::{TriangleSampler, VertexData, VoxelPipeline};
 use crate::scene::Interpolate;
 use crate::scene::{MaterialTexturing, Triangle, TriangleTextureData};
