@@ -1,19 +1,19 @@
 //! In-memory representation of the [`Scene`].
-use crate::geometry::{BoundingBox, Triangle};
-use std::sync::Arc;
+use std::ops::Range;
 
-pub use image::RgbaImage;
+use crate::pipelines::VertexData;
+use glam::Vec3;
 
 /// A complete 3D scene with all the data required for voxelization.
-pub struct Scene {
+pub struct Scene<V: VertexData, M> {
     /// All triangles contained within all instances of models of the scene.
     ///
     /// The scene does not distinguish models. If you have a model
     /// with multiple instances, you should just expand them all
     /// into different triangles.
-    pub triangles: Vec<Triangle>,
+    pub triangles: Vec<Triangle<V>>,
     /// All materials contained within the scene
-    pub materials: Vec<Material>,
+    pub materials: Vec<M>,
     /// The bounding box of all triangles within the scene.
     ///
     /// During voxelization, the voxels (which should all be positioned
@@ -24,26 +24,38 @@ pub struct Scene {
     pub bounds: BoundingBox,
 }
 
-/// Determines how a mesh's color and emission are rendered.
-pub struct Material {
-    /// Data about the albedo texture of the material
-    pub texturing: Option<MaterialTexturing>,
-    /// The color alpha threshold below which any voxels should be
-    /// discarded. If not present, no discarding will happen.
-    pub alpha_threshold: Option<u8>,
-    /// The base color of the material. If the material is emissive,
-    /// this will be the color of its emissive texture.
-    pub base_color: [u8; 4],
-    /// Whether the material is emissive
-    pub emissive: bool,
+/// A part of the scene.
+pub struct SceneSlice<'a, V: VertexData, M> {
+    /// The original, whole scene
+    pub scene: &'a Scene<V, M>,
+    /// The voxel range (in the scene's bounds!) that the scene
+    /// spans over. Note that if you don't provide actual
+    /// [`indices`](Self::indices) the voxelizer will still visit
+    /// every triangle and discard most of it.
+    pub range: Range<[i32; 3]>,
+    /// The indices which the voxelizer should voxelize. Even if
+    /// a triangle falls within the [`range`](Self::range), the
+    /// voxelizer won't touch it. If no indices are provided,
+    /// the voxelizer will visit every triangle in the scene, and
+    /// discard most (if not all) of it.
+    pub indices: Option<&'a [usize]>,
 }
 
-/// Data about the albedo texture of the material
-pub struct MaterialTexturing {
-    /// The actual texture
-    pub texture: Arc<RgbaImage>,
-    /// Wrap modes for `u, v` respectively
-    pub wrap_mode: [WrapMode; 2],
+impl<V: VertexData, M> SceneSlice<'_, V, M> {
+    pub fn for_each_triangle(&self, mut op: impl FnMut(Triangle<V>)) {
+        match self.indices {
+            Some(indices) => {
+                for &idx in indices {
+                    op(self.scene.triangles[idx]);
+                }
+            }
+            None => {
+                for &tri in &self.scene.triangles {
+                    op(tri);
+                }
+            }
+        }
+    }
 }
 
 /// Wrap mode of a texture
@@ -73,5 +85,85 @@ impl WrapMode {
                 if m > 1.0 { 2.0 - m } else { m }
             }
         }
+    }
+}
+
+/// Triangle, defined by three vertices and a material that it uses.
+#[derive(Clone, Copy)]
+pub struct Triangle<V: VertexData> {
+    /// The vertices of the triangle. Named `a, b, c` respectively
+    /// in many parts of the code
+    pub vertices: [V; 3],
+    /// The material used by this triangle. This is
+    /// an index into the scene's materials
+    pub material_index: u32,
+}
+
+impl<V: VertexData> Triangle<V> {
+    #[inline]
+    #[must_use]
+    pub(crate) fn unpack_vertices_to_glam(&self) -> [Vec3; 3] {
+        self.vertices.map(|vertex| Vec3::from_array(vertex.pos()))
+    }
+
+    pub(crate) fn unpack<T>(&self, f: impl Fn(V) -> T) -> [T; 3] {
+        self.vertices.map(|v| f(v))
+    }
+}
+
+/// The bounding box of a scene.
+///
+/// During voxelization, the voxels (which should all be positioned within
+/// the bounding box of the scene) will be translated so that instead of
+/// starting at [`min`](Self::min) and ending at [`max`](Self::max), they
+/// will start at `0, 0, 0` and end at [`size`](Self::size) instead.
+#[derive(Debug, Clone, Copy)]
+pub struct BoundingBox {
+    /// The smallest (minimum) point of the bounding box
+    pub min: [f32; 3],
+    /// The largest (maximum) point of the bounding box
+    pub max: [f32; 3],
+}
+
+impl BoundingBox {
+    /// Creates an empty bounding box with no volume.
+    #[inline]
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            min: [f32::MAX; 3],
+            max: [f32::MIN; 3],
+        }
+    }
+
+    /// Returns true if no points have been added to this box.
+    #[inline]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.min[0] > self.max[0] || self.min[1] > self.max[1] || self.min[2] > self.max[2]
+    }
+
+    /// Extends the bounding box so that it contains the point `p`
+    #[inline]
+    pub const fn extend(&mut self, p: [f32; 3]) {
+        self.min[0] = self.min[0].min(p[0]);
+        self.min[1] = self.min[1].min(p[1]);
+        self.min[2] = self.min[2].min(p[2]);
+        self.max[0] = self.max[0].max(p[0]);
+        self.max[1] = self.max[1].max(p[1]);
+        self.max[2] = self.max[2].max(p[2]);
+    }
+
+    /// Returns the size of the bounding box (i.e. `max - min`).
+    ///
+    /// If the bounding box is [`empty`](Self::empty), returns [`Vec3::ZERO`]
+    #[inline]
+    #[must_use]
+    pub fn size(&self) -> [f32; 3] {
+        [
+            self.max[0] - self.min[0],
+            self.max[1] - self.min[1],
+            self.max[2] - self.min[2],
+        ]
     }
 }

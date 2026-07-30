@@ -1,6 +1,6 @@
 //! Core voxelization algorithms and storage traits.
-use crate::geometry::Triangle;
-use crate::scene::{Scene, WrapMode};
+use crate::pipelines::{VertexData, VoxelPipeline};
+use crate::scene::{BoundingBox, Scene, SceneSlice, Triangle, WrapMode};
 use glam::{IVec3, Vec2, Vec3, Vec4};
 use image::RgbaImage;
 use std::fmt;
@@ -48,26 +48,26 @@ pub trait VoxelStore {
 
 /// Voxelizes the edges of the provided `triangle`.
 #[inline]
-fn voxelize_wireframe<T: VoxelStore>(
+fn voxelize_wireframe<P: VoxelPipeline, T: VoxelStore>(
     store: &mut T,
-    shading: &TriangleData,
-    triangle: Triangle,
+    shading: &P::TriangleData<'_>,
+    triangle: Triangle<P::Vertex>,
     range: Range<[i32; 3]>,
 ) {
     let [a, b, c] = triangle.unpack_vertices_to_glam();
 
-    voxelize_line(store, shading, a, b, range.clone());
-    voxelize_line(store, shading, b, c, range.clone());
-    voxelize_line(store, shading, a, c, range);
+    voxelize_line::<P, T>(store, shading, a, b, range.clone());
+    voxelize_line::<P, T>(store, shading, b, c, range.clone());
+    voxelize_line::<P, T>(store, shading, a, c, range);
 }
 
 /// Voxelizes the provided `triangle`.
 #[inline]
 #[expect(clippy::suboptimal_flops, reason = "FMA makes the function unreadable")]
-fn voxelize_triangle<T: VoxelStore, const FAT: bool>(
+fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore, const FAT: bool>(
     store: &mut T,
-    shading: &TriangleData,
-    triangle: Triangle,
+    shading: &P::TriangleData<'_>,
+    triangle: Triangle<P::Vertex>,
     range: Range<[i32; 3]>,
 ) {
     // TLDR: we voxelize the triangle by flattening it onto some plane
@@ -200,9 +200,9 @@ fn voxelize_triangle<T: VoxelStore, const FAT: bool>(
 
 /// Voxelizes a line going from `p1` to `p2` with the provided shading using a DDA algorythm
 #[inline]
-fn voxelize_line<T: VoxelStore>(
+fn voxelize_line<P: VoxelPipeline, T: VoxelStore>(
     store: &mut T,
-    shading: &TriangleData,
+    shading: &P::TriangleData<'_>,
     p1: Vec3,
     p2: Vec3,
     range: Range<[i32; 3]>,
@@ -290,8 +290,14 @@ fn voxelize_line<T: VoxelStore>(
 
 /// Voxelizes the points of the provided `triangle`
 #[inline]
-fn voxelize_points<T: VoxelStore>(store: &mut T, shading: &TriangleData, triangle: Triangle) {
-    let [a, b, c] = triangle.vertices.map(|vertex| vertex.pos.map(|p| p as i32));
+fn voxelize_points<P: VoxelPipeline, T: VoxelStore>(
+    store: &mut T,
+    shading: &P::TriangleData<'_>,
+    triangle: Triangle<P::Vertex>,
+) {
+    let [a, b, c] = triangle
+        .vertices
+        .map(|vertex| vertex.pos().map(|p| p as i32));
 
     if let Some(color) = shading.sample_from_bary(Vec3::X) {
         store.add_voxel(a, color, shading.is_emissive());
@@ -304,102 +310,8 @@ fn voxelize_points<T: VoxelStore>(store: &mut T, shading: &TriangleData, triangl
     }
 }
 
-#[inline]
-#[must_use]
-fn interpolate_color(colors: [[u8; 4]; 3], bary: Vec3) -> [u8; 4] {
-    let c0 = Vec4::from_array(colors[0].map(|c| c as f32));
-    let c1 = Vec4::from_array(colors[1].map(|c| c as f32));
-    let c2 = Vec4::from_array(colors[2].map(|c| c as f32));
-
-    let final_color = c0 * bary.x + c1 * bary.y + c2 * bary.z;
-
-    final_color.as_u8vec4().to_array()
-}
-
-#[inline]
-#[must_use]
-fn multiply_colors(c1: [u8; 4], c2: [u8; 4]) -> [u8; 4] {
-    std::array::from_fn(|i| ((c1[i] as u16 * c2[i] as u16) / 255) as u8)
-}
-
-struct TriangleTextureData<'a> {
-    pub texture: &'a RgbaImage,
-    pub uvs: [Vec2; 3],
-    pub wrap: [WrapMode; 2],
-}
-
-struct TriangleData<'a> {
-    precalc: TriangleInterpolator,
-    vert_colors: [[u8; 4]; 3],
-    base_color: [u8; 4],
-    is_emissive: bool,
-    texture: Option<TriangleTextureData<'a>>,
-    alpha_threshold: Option<u8>,
-}
-
-impl TriangleData<'_> {
-    #[inline]
-    #[must_use]
-    pub const fn is_emissive(&self) -> bool {
-        self.is_emissive
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn sample_from_bary(&self, mut bary: Vec3) -> Option<[u8; 4]> {
-        bary = bary.max(Vec3::ZERO);
-
-        let sum = bary.x + bary.y + bary.z;
-        if sum > f32::EPSILON {
-            bary /= sum;
-        }
-
-        let vertex_color = interpolate_color(self.vert_colors, bary);
-
-        let base_color = match self.texture {
-            Some(TriangleTextureData {
-                texture,
-                uvs,
-                wrap: [wrap_u, wrap_v],
-            }) => {
-                let mut uv = (uvs[0] * bary.x) + (uvs[1] * bary.y) + (uvs[2] * bary.z);
-
-                uv.x = wrap_u.apply(uv.x);
-                uv.y = wrap_v.apply(uv.y);
-
-                let (w, h) = texture.dimensions();
-                let x = (((w - 1) as f32) * uv.x) as u32;
-                let y = (((h - 1) as f32) * uv.y) as u32;
-
-                let tex_color = texture.get_pixel(x, y).0;
-
-                multiply_colors(tex_color, self.base_color)
-            }
-            None => self.base_color,
-        };
-
-        let color = multiply_colors(base_color, vertex_color);
-
-        if let Some(threshold) = self.alpha_threshold
-            && color[3] < threshold
-        {
-            return None;
-        }
-
-        Some(color)
-    }
-
-    #[inline]
-    #[must_use]
-    pub fn snap_and_get_color(&self, pos: IVec3) -> Option<[u8; 4]> {
-        let bary = self.precalc.get_closest_barycentric(pos.as_vec3());
-
-        self.sample_from_bary(bary)
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
-struct TriangleInterpolator {
+pub struct TriangleInterpolator {
     /// `a`
     a: Vec3,
 
@@ -427,7 +339,7 @@ impl TriangleInterpolator {
         clippy::suboptimal_flops,
         reason = "fma makes this unreadable, and it only influences precision, not performance"
     )]
-    pub fn new(tri: Triangle) -> Self {
+    pub fn new<V: VertexData>(tri: &Triangle<V>) -> Self {
         let [a, b, c] = tri.unpack_vertices_to_glam();
 
         let v0 = b - a;
@@ -482,45 +394,11 @@ impl TriangleInterpolator {
     }
 }
 
-/// A part of the scene.
-pub struct SceneSlice<'a> {
-    /// The original, whole scene
-    pub scene: &'a Scene,
-    /// The voxel range (in the scene's bounds!) that the scene
-    /// spans over. Note that if you don't provide actual
-    /// [`indices`](Self::indices) the voxelizer will still visit
-    /// every triangle and discard most of it.
-    pub range: Range<[i32; 3]>,
-    /// The indices which the voxelizer should voxelize. Even if
-    /// a triangle falls within the [`range`](Self::range), the
-    /// voxelizer won't touch it. If no indices are provided,
-    /// the voxelizer will visit every triangle in the scene, and
-    /// discard most (if not all) of it.
-    pub indices: Option<&'a [usize]>,
-}
-
-impl SceneSlice<'_> {
-    fn for_each_triangle(&self, mut op: impl FnMut(Triangle)) {
-        match self.indices {
-            Some(indices) => {
-                for &idx in indices {
-                    op(self.scene.triangles[idx]);
-                }
-            }
-            None => {
-                for &tri in &self.scene.triangles {
-                    op(tri);
-                }
-            }
-        }
-    }
-}
-
 /// Voxelizes a slice of a scene using the provided settings.
 #[profiling::function]
-pub fn voxelize_scene<T: VoxelStore>(
+pub fn voxelize_scene<P: VoxelPipeline, T: VoxelStore>(
     store: &mut T,
-    input: SceneSlice,
+    input: SceneSlice<'_, P::Vertex, P::Material>,
     mode: VoxelizationMode,
     size: u32,
 ) {
@@ -542,27 +420,12 @@ pub fn voxelize_scene<T: VoxelStore>(
             .get(mat_id as usize)
             .unwrap_or(&input.scene.materials[0]);
 
-        let texture = material.texturing.as_ref().map(|data| TriangleTextureData {
-            texture: &data.texture,
-            uvs: triangle.uvs().unwrap().map(Vec2::from_array),
-            wrap: data.wrap_mode,
-        });
-
-        let shading = TriangleData {
-            texture,
-            precalc: TriangleInterpolator::new(triangle),
-            vert_colors: triangle.colors(),
-            is_emissive: material.emissive,
-            base_color: material.base_color,
-            alpha_threshold: material.alpha_threshold,
-        };
-
         match mode {
             VoxelizationMode::Triangles => {
-                voxelize_triangle::<T, false>(store, &shading, triangle, input.range.clone());
+                voxelize_triangle::<P, T, false>(store, &shading, triangle, input.range.clone());
             }
             VoxelizationMode::FatTriangles => {
-                voxelize_triangle::<T, true>(store, &shading, triangle, input.range.clone());
+                voxelize_triangle::<P, T, true>(store, &shading, triangle, input.range.clone());
             }
             VoxelizationMode::Wireframe => {
                 voxelize_wireframe(store, &shading, triangle, input.range.clone());

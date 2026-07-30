@@ -23,7 +23,8 @@ use std::path::Path;
 
 pub use image;
 
-pub mod geometry;
+mod pipelines;
+
 pub mod io;
 pub mod scene;
 pub mod voxelizer;
