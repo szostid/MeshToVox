@@ -1,8 +1,9 @@
 //! In-memory representation of the [`Scene`].
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use crate::pipelines::{VertexData, VoxelPipeline};
 use glam::Vec3;
+use image::RgbaImage;
 
 /// A complete 3D scene with all the data required for voxelization.
 pub struct Scene<P: VoxelPipeline> {
@@ -103,11 +104,19 @@ impl<V: VertexData> Triangle<V> {
     #[inline]
     #[must_use]
     pub(crate) fn unpack_vertices_to_glam(&self) -> [Vec3; 3] {
-        self.vertices.map(|vertex| Vec3::from_array(vertex.pos()))
+        self.unpack(|vertex| Vec3::from_array(vertex.pos()))
     }
 
-    pub(crate) fn unpack<T>(&self, f: impl Fn(V) -> T) -> [T; 3] {
-        self.vertices.map(|v| f(v))
+    pub fn try_unpack<T>(&self, f: impl Fn(&V) -> Option<T>) -> Option<[T; 3]> {
+        let [a, b, c] = &self.vertices;
+
+        Some([f(a)?, f(b)?, f(c)?])
+    }
+
+    pub fn unpack<T>(&self, f: impl Fn(&V) -> T) -> [T; 3] {
+        let [a, b, c] = &self.vertices;
+
+        [f(a), f(b), f(c)]
     }
 }
 
@@ -166,4 +175,12 @@ impl BoundingBox {
             self.max[2] - self.min[2],
         ]
     }
+}
+
+/// Data about the albedo texture of the material
+pub struct MaterialTexturing {
+    /// The actual texture
+    pub texture: Arc<RgbaImage>,
+    /// Wrap modes for `u, v` respectively
+    pub wrap_mode: [WrapMode; 2],
 }

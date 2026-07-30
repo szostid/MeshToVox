@@ -1,16 +1,20 @@
-use crate::pipelines::{VertexData, VoxelPipeline};
-use crate::scene::{Triangle, WrapMode};
+use crate::pipelines::{TriangleSampler, VertexData, VoxelPipeline};
+use crate::scene::{MaterialTexturing, Triangle, WrapMode};
 use glam::{Vec2, Vec3, Vec4};
-use std::sync::Arc;
 
 pub use image::RgbaImage;
 
+/// A voxel with an associated color.
+///
+/// Used with the `pbrless` pipeline
 #[derive(Clone, Copy)]
 pub struct Voxel {
     pub color: [u8; 4],
 }
 
 /// A vertex with some associated color and UV (if present) data.
+///
+/// Used with the `pbrless` pipeline
 #[derive(Debug, Clone, Copy)]
 pub struct Vertex {
     /// Position of the vertex.
@@ -72,14 +76,6 @@ pub struct Material {
     pub emissive: bool,
 }
 
-/// Data about the albedo texture of the material
-pub struct MaterialTexturing {
-    /// The actual texture
-    pub texture: Arc<RgbaImage>,
-    /// Wrap modes for `u, v` respectively
-    pub wrap_mode: [WrapMode; 2],
-}
-
 #[inline]
 #[must_use]
 fn interpolate_color(colors: [[u8; 4]; 3], bary: Vec3) -> [u8; 4] {
@@ -106,22 +102,14 @@ struct TriangleTextureData<'a> {
 
 pub struct TriangleData<'a> {
     vert_colors: [[u8; 4]; 3],
-    base_color: [u8; 4],
-    is_emissive: bool,
     texture: Option<TriangleTextureData<'a>>,
     alpha_threshold: Option<u8>,
 }
 
-impl TriangleData<'_> {
-    #[inline]
-    #[must_use]
-    pub const fn is_emissive(&self) -> bool {
-        self.is_emissive
-    }
+impl<'a> TriangleSampler<'a> for TriangleData<'a> {
+    type VoxelData = Voxel;
 
-    #[inline]
-    #[must_use]
-    pub fn sample_from_bary(&self, mut bary: Vec3) -> Option<Voxel> {
+    fn sample_from_bary(&self, mut bary: Vec3) -> Option<Voxel> {
         bary = bary.max(Vec3::ZERO);
 
         let sum = bary.x + bary.y + bary.z;
@@ -129,31 +117,25 @@ impl TriangleData<'_> {
             bary /= sum;
         }
 
-        let vertex_color = interpolate_color(self.vert_colors, bary);
+        let mut color = interpolate_color(self.vert_colors, bary);
 
-        let base_color = match self.texture {
-            Some(TriangleTextureData {
-                texture,
-                uvs,
-                wrap: [wrap_u, wrap_v],
-            }) => {
-                let mut uv = (uvs[0] * bary.x) + (uvs[1] * bary.y) + (uvs[2] * bary.z);
+        if let Some(TriangleTextureData {
+            texture,
+            uvs,
+            wrap: [wrap_u, wrap_v],
+        }) = &self.texture
+        {
+            let mut uv = (uvs[0] * bary.x) + (uvs[1] * bary.y) + (uvs[2] * bary.z);
+            uv.x = wrap_u.apply(uv.x);
+            uv.y = wrap_v.apply(uv.y);
 
-                uv.x = wrap_u.apply(uv.x);
-                uv.y = wrap_v.apply(uv.y);
+            let (w, h) = texture.dimensions();
+            let x = (((w - 1) as f32) * uv.x) as u32;
+            let y = (((h - 1) as f32) * uv.y) as u32;
 
-                let (w, h) = texture.dimensions();
-                let x = (((w - 1) as f32) * uv.x) as u32;
-                let y = (((h - 1) as f32) * uv.y) as u32;
-
-                let tex_color = texture.get_pixel(x, y).0;
-
-                multiply_colors(tex_color, self.base_color)
-            }
-            None => self.base_color,
-        };
-
-        let color = multiply_colors(base_color, vertex_color);
+            let tex_color = texture.get_pixel(x, y).0;
+            color = multiply_colors(color, tex_color);
+        }
 
         if let Some(threshold) = self.alpha_threshold
             && color[3] < threshold
@@ -169,32 +151,28 @@ pub struct Pipeline;
 
 impl VoxelPipeline for Pipeline {
     type Vertex = Vertex;
-    type Material = Material;
     type VoxelData = Voxel;
 
-    type TriangleData<'a> = TriangleData<'a>;
+    type Material = Material;
 
-    fn prepare_triangle<'a>(
+    type TriangleSampler<'a> = TriangleData<'a>;
+
+    fn prepare_sampler<'a>(
         material: &'a Self::Material,
         triangle: &Triangle<Vertex>,
-    ) -> Self::TriangleData<'a> {
+    ) -> Self::TriangleSampler<'a> {
         let texture = material.texturing.as_ref().map(|data| TriangleTextureData {
             texture: &data.texture,
-            // TODO(szostid)
-            uvs: triangle.unpack(|v| Vec2::from_array(v.uv().unwrap())),
+            uvs: triangle
+                .try_unpack(|v| v.uv().map(Vec2::from_array))
+                .unwrap(),
             wrap: data.wrap_mode,
         });
 
         TriangleData {
             texture,
-            vert_colors: triangle.unpack(|v| v.color),
-            is_emissive: material.emissive,
-            base_color: material.base_color,
+            vert_colors: triangle.unpack(|v| multiply_colors(v.color, material.base_color)),
             alpha_threshold: material.alpha_threshold,
         }
-    }
-
-    fn sample_from_bary(data: &Self::TriangleData<'_>, bary: Vec3) -> Option<Voxel> {
-        data.sample_from_bary(bary)
     }
 }

@@ -1,5 +1,5 @@
 //! Core voxelization algorithms and storage traits.
-use crate::pipelines::{VertexData, VoxelPipeline};
+use crate::pipelines::{TriangleSampler, VertexData, VoxelPipeline};
 use crate::scene::{SceneSlice, Triangle};
 use glam::{IVec3, Vec2, Vec3};
 use std::fmt;
@@ -49,7 +49,7 @@ pub trait VoxelStore<Data> {
 #[inline]
 fn voxelize_wireframe<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
     store: &mut T,
-    shading: &P::TriangleData<'_>,
+    shading: &P::TriangleSampler<'_>,
     interpolator: &TriangleInterpolator,
     triangle: Triangle<P::Vertex>,
     range: Range<[i32; 3]>,
@@ -66,7 +66,7 @@ fn voxelize_wireframe<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
 #[expect(clippy::suboptimal_flops, reason = "FMA makes the function unreadable")]
 fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore<P::VoxelData>, const FAT: bool>(
     store: &mut T,
-    shading: &P::TriangleData<'_>,
+    shading: &P::TriangleSampler<'_>,
     interpolator: &TriangleInterpolator,
     triangle: Triangle<P::Vertex>,
     range: Range<[i32; 3]>,
@@ -170,7 +170,7 @@ fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore<P::VoxelData>, const FAT: b
                 // note that `plane_d` is the plane constant `D` from the equation above
                 let depth = (plane_d - normal_u * p.x - normal_v * p.y) * normal_d_inv;
 
-                let color = P::sample_from_bary(shading, Vec3::new(a_bary, b_bary, c_bary));
+                let color = shading.sample_from_bary(Vec3::new(a_bary, b_bary, c_bary));
 
                 if let Some(color) = color {
                     if FAT {
@@ -203,7 +203,7 @@ fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore<P::VoxelData>, const FAT: b
 #[inline]
 fn voxelize_line<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
     store: &mut T,
-    shading: &P::TriangleData<'_>,
+    shading: &P::TriangleSampler<'_>,
     interpolator: &TriangleInterpolator,
     p1: Vec3,
     p2: Vec3,
@@ -270,7 +270,7 @@ fn voxelize_line<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
 
     for _ in 0..max_steps {
         let bary = interpolator.get_closest_barycentric(voxel_pos.as_vec3());
-        let color = P::sample_from_bary(shading, bary);
+        let color = shading.sample_from_bary(bary);
 
         if let Some(color) = color {
             store.add_voxel(voxel_pos.to_array(), color);
@@ -295,20 +295,20 @@ fn voxelize_line<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
 #[inline]
 fn voxelize_points<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
     store: &mut T,
-    shading: &P::TriangleData<'_>,
+    shading: &P::TriangleSampler<'_>,
     triangle: Triangle<P::Vertex>,
 ) {
     let [a, b, c] = triangle
         .vertices
         .map(|vertex| vertex.pos().map(|p| p as i32));
 
-    if let Some(data) = P::sample_from_bary(shading, Vec3::X) {
+    if let Some(data) = shading.sample_from_bary(Vec3::X) {
         store.add_voxel(a, data);
     }
-    if let Some(data) = P::sample_from_bary(shading, Vec3::Y) {
+    if let Some(data) = shading.sample_from_bary(Vec3::Y) {
         store.add_voxel(b, data);
     }
-    if let Some(data) = P::sample_from_bary(shading, Vec3::Z) {
+    if let Some(data) = shading.sample_from_bary(Vec3::Z) {
         store.add_voxel(c, data);
     }
 }
@@ -425,7 +425,7 @@ pub fn voxelize_scene<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
             .get(mat_id as usize)
             .unwrap_or(&input.scene.materials[0]);
 
-        let shading = P::prepare_triangle(material, &triangle);
+        let shading = P::prepare_sampler(material, &triangle);
         let interpolator = TriangleInterpolator::new(&triangle);
 
         match mode {

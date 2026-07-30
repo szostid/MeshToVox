@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use voxquant_core::io::SceneReader;
 use voxquant_core::pipelines::pbrless;
-use voxquant_core::scene::{BoundingBox, Triangle};
+use voxquant_core::scene::{BoundingBox, MaterialTexturing, Triangle};
 use voxquant_core::scene::{Scene, WrapMode};
 use voxquant_core::{Format, InputFormat};
 
@@ -110,7 +110,7 @@ fn parse_image(image_data: &[Arc<RgbaImage>], texture: gltf::Texture) -> Result<
 fn get_material_texture_data(
     mat: &gltf::Material,
     image_data: &[Arc<RgbaImage>],
-) -> Result<Option<(pbrless::MaterialTexturing, GltfTexturingExtras)>> {
+) -> Result<Option<(MaterialTexturing, GltfTexturingExtras)>> {
     fn with_material_texture<R>(
         mat: &gltf::Material,
         f: impl FnOnce(gltf::texture::Info<'_>) -> R,
@@ -147,7 +147,7 @@ fn get_material_texture_data(
         let texture = image_data.get(texture_index).ok_or(Error::OutOfBounds)?;
 
         Ok((
-            pbrless::MaterialTexturing {
+            MaterialTexturing {
                 texture: Arc::clone(texture),
                 wrap_mode: [
                     into_voxelization_mode(texture_info.texture().sampler().wrap_s()),
