@@ -1,6 +1,6 @@
+use crate::Interpolate;
 use crate::pipelines::{TriangleSampler, VertexData, VoxelPipeline};
-use crate::scene::{MaterialTexturing, Triangle, WrapMode};
-use glam::{Vec2, Vec3, Vec4};
+use crate::scene::{MaterialTexturing, Triangle, TriangleTextureData};
 
 pub use image::RgbaImage;
 
@@ -78,60 +78,42 @@ pub struct Material {
 
 #[inline]
 #[must_use]
-fn interpolate_color(colors: [[u8; 4]; 3], bary: Vec3) -> [u8; 4] {
-    let c0 = Vec4::from_array(colors[0].map(|c| c as f32));
-    let c1 = Vec4::from_array(colors[1].map(|c| c as f32));
-    let c2 = Vec4::from_array(colors[2].map(|c| c as f32));
-
-    let final_color = c0 * bary.x + c1 * bary.y + c2 * bary.z;
-
-    final_color.as_u8vec4().to_array()
-}
-
-#[inline]
-#[must_use]
 fn multiply_colors(c1: [u8; 4], c2: [u8; 4]) -> [u8; 4] {
     std::array::from_fn(|i| ((c1[i] as u16 * c2[i] as u16) / 255) as u8)
 }
 
-struct TriangleTextureData<'a> {
-    pub texture: &'a RgbaImage,
-    pub uvs: [Vec2; 3],
-    pub wrap: [WrapMode; 2],
-}
-
 pub struct TriangleData<'a> {
     vert_colors: [[u8; 4]; 3],
-    texture: Option<TriangleTextureData<'a>>,
+    albedo_texture: Option<TriangleTextureData<'a>>,
     alpha_threshold: Option<u8>,
 }
 
 impl<'a> TriangleSampler<'a> for TriangleData<'a> {
     type VoxelData = Voxel;
 
-    fn sample_from_bary(&self, mut bary: Vec3) -> Option<Voxel> {
-        bary = bary.max(Vec3::ZERO);
+    fn sample_from_bary(&self, mut bary: [f32; 3]) -> Option<Voxel> {
+        bary = bary.map(|b| f32::max(b, 0.0));
 
-        let sum = bary.x + bary.y + bary.z;
+        let sum = bary[0] + bary[1] + bary[2];
         if sum > f32::EPSILON {
-            bary /= sum;
+            bary = bary.map(|b| b / sum);
         }
 
-        let mut color = interpolate_color(self.vert_colors, bary);
+        let mut color = Interpolate::interpolate(self.vert_colors, bary);
 
         if let Some(TriangleTextureData {
             texture,
             uvs,
             wrap: [wrap_u, wrap_v],
-        }) = &self.texture
+        }) = &self.albedo_texture
         {
-            let mut uv = (uvs[0] * bary.x) + (uvs[1] * bary.y) + (uvs[2] * bary.z);
-            uv.x = wrap_u.apply(uv.x);
-            uv.y = wrap_v.apply(uv.y);
+            let mut uv = Interpolate::interpolate(*uvs, bary);
+            uv[0] = wrap_u.apply(uv[0]);
+            uv[1] = wrap_v.apply(uv[1]);
 
             let (w, h) = texture.dimensions();
-            let x = (((w - 1) as f32) * uv.x) as u32;
-            let y = (((h - 1) as f32) * uv.y) as u32;
+            let x = (((w - 1) as f32) * uv[0]) as u32;
+            let y = (((h - 1) as f32) * uv[1]) as u32;
 
             let tex_color = texture.get_pixel(x, y).0;
             color = multiply_colors(color, tex_color);
@@ -161,16 +143,13 @@ impl VoxelPipeline for Pipeline {
         material: &'a Self::Material,
         triangle: &Triangle<Vertex>,
     ) -> Self::TriangleSampler<'a> {
-        let texture = material.texturing.as_ref().map(|data| TriangleTextureData {
-            texture: &data.texture,
-            uvs: triangle
-                .try_unpack(|v| v.uv().map(Vec2::from_array))
-                .unwrap(),
-            wrap: data.wrap_mode,
-        });
+        let texture = material
+            .texturing
+            .as_ref()
+            .map(|data| data.as_triangle(triangle.try_unpack(Vertex::uv).unwrap()));
 
         TriangleData {
-            texture,
+            albedo_texture: texture,
             vert_colors: triangle.unpack(|v| multiply_colors(v.color, material.base_color)),
             alpha_threshold: material.alpha_threshold,
         }

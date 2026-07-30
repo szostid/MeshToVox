@@ -184,3 +184,21 @@ pub struct MaterialTexturing {
     /// Wrap modes for `u, v` respectively
     pub wrap_mode: [WrapMode; 2],
 }
+
+pub struct TriangleTextureData<'a> {
+    pub texture: &'a RgbaImage,
+    pub uvs: [[f32; 2]; 3],
+    pub wrap: [WrapMode; 2],
+}
+
+impl MaterialTexturing {
+    #[inline]
+    #[must_use]
+    pub fn as_triangle(&self, uvs: [[f32; 2]; 3]) -> TriangleTextureData<'_> {
+        TriangleTextureData {
+            texture: &self.texture,
+            uvs,
+            wrap: self.wrap_mode,
+        }
+    }
+}

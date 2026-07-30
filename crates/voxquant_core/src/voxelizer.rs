@@ -170,7 +170,7 @@ fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore<P::VoxelData>, const FAT: b
                 // note that `plane_d` is the plane constant `D` from the equation above
                 let depth = (plane_d - normal_u * p.x - normal_v * p.y) * normal_d_inv;
 
-                let color = shading.sample_from_bary(Vec3::new(a_bary, b_bary, c_bary));
+                let color = shading.sample_from_bary([a_bary, b_bary, c_bary]);
 
                 if let Some(color) = color {
                     if FAT {
@@ -302,13 +302,13 @@ fn voxelize_points<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
         .vertices
         .map(|vertex| vertex.pos().map(|p| p as i32));
 
-    if let Some(data) = shading.sample_from_bary(Vec3::X) {
+    if let Some(data) = shading.sample_from_bary([1.0, 0.0, 0.0]) {
         store.add_voxel(a, data);
     }
-    if let Some(data) = shading.sample_from_bary(Vec3::Y) {
+    if let Some(data) = shading.sample_from_bary([0.0, 1.0, 0.0]) {
         store.add_voxel(b, data);
     }
-    if let Some(data) = shading.sample_from_bary(Vec3::Z) {
+    if let Some(data) = shading.sample_from_bary([0.0, 0.0, 1.0]) {
         store.add_voxel(c, data);
     }
 }
@@ -383,7 +383,7 @@ impl TriangleInterpolator {
         clippy::suboptimal_flops,
         reason = "fma makes this unreadable, and it only influences precision, not performance"
     )]
-    pub fn get_closest_barycentric(&self, p: Vec3) -> Vec3 {
+    pub fn get_closest_barycentric(&self, p: Vec3) -> [f32; 3] {
         let v2 = p - self.a;
 
         let d20 = self.v0.dot(v2);
@@ -393,7 +393,7 @@ impl TriangleInterpolator {
         let w = (self.d00 * d21 - self.d01 * d20) * self.inv_det;
         let u = 1.0 - v - w;
 
-        Vec3::new(u, v, w)
+        [u, v, w]
     }
 }
 

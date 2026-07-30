@@ -1,5 +1,3 @@
-use glam::Vec3;
-
 use crate::scene::Triangle;
 
 pub mod pbrless;
@@ -11,8 +9,8 @@ pub trait VertexData: Copy {
     /// Returns the position of the vertex
     #[must_use]
     fn pos(&self) -> [f32; 3];
-    /// Sets the position of the vertex
 
+    /// Sets the position of the vertex
     fn set_pos(&mut self, pos: [f32; 3]);
 }
 
@@ -26,7 +24,7 @@ pub trait TriangleSampler<'a> {
 
     /// Samples the data of the voxel at the provided barycentric coordinates.
     #[must_use]
-    fn sample_from_bary(&self, bary: Vec3) -> Option<Self::VoxelData>;
+    fn sample_from_bary(&self, bary: [f32; 3]) -> Option<Self::VoxelData>;
 }
 
 /// A rasterization pipeline.
