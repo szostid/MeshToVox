@@ -4,7 +4,7 @@ use image::RgbaImage;
 use std::path::PathBuf;
 use std::sync::Arc;
 use voxquant_core::io::SceneReader;
-use voxquant_core::pipelines::pbrless;
+use voxquant_core::pipelines::VoxelPipeline;
 use voxquant_core::scene::{BoundingBox, MaterialTexturing, Triangle};
 use voxquant_core::scene::{Scene, WrapMode};
 use voxquant_core::{Format, InputFormat};
@@ -12,18 +12,37 @@ use voxquant_core::{Format, InputFormat};
 mod error;
 pub use error::Error;
 
+mod pbr;
+mod pbrless;
+
+trait GltfPipeline: VoxelPipeline {
+    type MaterialExtras;
+
+    const USES_NORMALS: bool;
+
+    /// Builds the pipeline-specific material from a glTF material.
+    fn parse_material(
+        mat: &gltf::Material,
+        image_data: &[Arc<RgbaImage>],
+    ) -> Result<(Self::Material, Self::MaterialExtras)>;
+
+    /// Provides a fallback material if parsing fails or an index is missing.
+    fn fallback_material() -> (Self::Material, Self::MaterialExtras);
+
+    fn get_uv_channel(extras: &Self::MaterialExtras) -> u32;
+
+    /// Constructs the pipeline's vertex. The pipeline can choose to ignore
+    /// normals or colors if it doesn't support them.
+    fn create_vertex(
+        pos: [f32; 3],
+        normal: Option<[f32; 3]>,
+        uv: Option<[f32; 2]>,
+        color: Option<[u8; 4]>,
+    ) -> Self::Vertex;
+}
+
 /// Result type for convenience.
 pub type Result<T> = std::result::Result<T, Error>;
-
-struct GltfTexturingExtras {
-    tex_coord: u32,
-}
-
-struct GltfMaterialExtras {
-    /// If the material has some [`texturing`](Material::texturing),
-    /// this will contain the texturing extras
-    texturing: Option<GltfTexturingExtras>,
-}
 
 struct MeshInstance<'a> {
     mesh: gltf::Mesh<'a>,
@@ -107,118 +126,10 @@ fn parse_image(image_data: &[Arc<RgbaImage>], texture: gltf::Texture) -> Result<
     Ok(Arc::clone(image))
 }
 
-fn get_material_texture_data(
-    mat: &gltf::Material,
-    image_data: &[Arc<RgbaImage>],
-) -> Result<Option<(MaterialTexturing, GltfTexturingExtras)>> {
-    fn with_material_texture<R>(
-        mat: &gltf::Material,
-        f: impl FnOnce(gltf::texture::Info<'_>) -> R,
-    ) -> Option<R> {
-        if let Some(info) = mat.emissive_texture() {
-            return Some(f(info));
-        }
-
-        if let Some(info) = mat.pbr_metallic_roughness().base_color_texture() {
-            return Some(f(info));
-        }
-
-        if let Some(info) = mat
-            .pbr_specular_glossiness()
-            .and_then(|spectral| spectral.diffuse_texture())
-        {
-            return Some(f(info));
-        }
-
-        None
-    }
-
-    const fn into_voxelization_mode(value: gltf::texture::WrappingMode) -> WrapMode {
-        match value {
-            gltf::texture::WrappingMode::ClampToEdge => WrapMode::ClampToEdge,
-            gltf::texture::WrappingMode::MirroredRepeat => WrapMode::MirroredRepeat,
-            gltf::texture::WrappingMode::Repeat => WrapMode::Repeat,
-        }
-    }
-
-    with_material_texture(mat, |texture_info| {
-        let texture_index = texture_info.texture().source().index();
-
-        let texture = image_data.get(texture_index).ok_or(Error::OutOfBounds)?;
-
-        Ok((
-            MaterialTexturing {
-                texture: Arc::clone(texture),
-                wrap_mode: [
-                    into_voxelization_mode(texture_info.texture().sampler().wrap_s()),
-                    into_voxelization_mode(texture_info.texture().sampler().wrap_t()),
-                ],
-            },
-            GltfTexturingExtras {
-                tex_coord: texture_info.tex_coord(),
-            },
-        ))
-    })
-    .map_or(Ok(None), |f| f.map(Some))
-}
-
-#[profiling::function]
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "intentionally quantized to 8-bit RGB"
-)]
-fn parse_material(
-    mat: &gltf::Material,
-    image_data: &[Arc<RgbaImage>],
-) -> Result<(pbrless::Material, GltfMaterialExtras)> {
-    let alpha_threshold = match mat.alpha_mode() {
-        gltf::material::AlphaMode::Opaque => None,
-        gltf::material::AlphaMode::Mask => {
-            let cutoff = mat.alpha_cutoff().unwrap_or(0.5);
-            Some((cutoff * 255.0) as u8)
-        }
-        // we cannot handle transparency yet, so we do a very high alpha threshold.
-        // basically everything that's not opaque is not voxelized at all
-        //
-        // NOTE: don't use 255 here, i've found that (i guess due to precision issues?)
-        // some stuff can become a swiss cheese with too high of a threashold
-        gltf::material::AlphaMode::Blend => Some(250),
-    };
-
-    let emissive = mat.emissive_factor().into_iter().any(|c| c > 0.0);
-
-    let base_color = if emissive {
-        let [r, g, b] = mat.emissive_factor().map(|r| (r * 255.0) as u8);
-
-        [r, g, b, 255]
-    } else {
-        mat.pbr_metallic_roughness()
-            .base_color_factor()
-            .map(|r| (r * 255.0) as u8)
-    };
-
-    let (texturing, texturing_extras) = match get_material_texture_data(mat, image_data)? {
-        Some((texturing, extras)) => (Some(texturing), Some(extras)),
-        None => (None, None),
-    };
-
-    Ok((
-        pbrless::Material {
-            texturing,
-            alpha_threshold,
-            base_color,
-            emissive,
-        },
-        GltfMaterialExtras {
-            texturing: texturing_extras,
-        },
-    ))
-}
-
 #[derive(Default)]
 struct MeshScratch {
     positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>, // Added normals vector
     uvs: Vec<[f32; 2]>,
     colors: Vec<[u8; 4]>,
     indices: Vec<u32>,
@@ -229,18 +140,18 @@ struct MeshScratch {
     clippy::cast_possible_truncation,
     reason = "safe to assume that neither material indices or triangle indices will be larger than usize"
 )]
-fn parse_mesh_instance(
+fn parse_mesh_instance<P: GltfPipeline>(
     instance: MeshInstance,
     bounds: &mut BoundingBox,
-    materials: &[pbrless::Material],
-    material_extras: &[GltfMaterialExtras],
+    materials: &[P::Material],
+    material_extras: &[P::MaterialExtras],
     buffers: &[gltf::buffer::Data],
-    triangles: &mut Vec<Triangle<pbrless::Vertex>>,
+    triangles: &mut Vec<Triangle<P::Vertex>>,
     scratch: &mut MeshScratch,
 ) -> Result<()> {
-    fn push_triangle(
+    fn push_triangle<P: GltfPipeline>(
         [i1, i2, i3]: [u32; 3],
-        triangles: &mut Vec<Triangle<pbrless::Vertex>>,
+        triangles: &mut Vec<Triangle<P::Vertex>>,
         scratch: &MeshScratch,
         material_index: u32,
     ) {
@@ -258,18 +169,21 @@ fn parse_mesh_instance(
 
         triangles.push(Triangle {
             vertices: [
-                pbrless::Vertex::new(
+                P::create_vertex(
                     scratch.positions[i1],
+                    scratch.normals.get(i1).copied(),
                     scratch.uvs.get(i1).copied(),
                     scratch.colors.get(i1).copied(),
                 ),
-                pbrless::Vertex::new(
+                P::create_vertex(
                     scratch.positions[i2],
+                    scratch.normals.get(i2).copied(),
                     scratch.uvs.get(i2).copied(),
                     scratch.colors.get(i2).copied(),
                 ),
-                pbrless::Vertex::new(
+                P::create_vertex(
                     scratch.positions[i3],
+                    scratch.normals.get(i3).copied(),
                     scratch.uvs.get(i3).copied(),
                     scratch.colors.get(i3).copied(),
                 ),
@@ -284,10 +198,7 @@ fn parse_mesh_instance(
 
         let material = &materials[material_idx];
 
-        let material_tex_coord = material_extras[material_idx]
-            .texturing
-            .as_ref()
-            .map_or(0, |tex| tex.tex_coord);
+        let material_tex_coord = P::get_uv_channel(&material_extras[material_idx]);
 
         let positions = reader
             .read_positions()
@@ -310,13 +221,18 @@ fn parse_mesh_instance(
         scratch.uvs.clear();
         if let Some(uv_iter) = reader.read_tex_coords(material_tex_coord) {
             scratch.uvs.extend(uv_iter.into_f32());
-        } else if material.texturing.is_some() {
-            eprintln!("material has an explicit `tex_coord` which doesn't exist");
         }
 
         scratch.colors.clear();
         if let Some(color_iter) = reader.read_colors(0) {
             scratch.colors.extend(color_iter.into_rgba_u8());
+        }
+
+        scratch.normals.clear();
+        if P::USES_NORMALS {
+            if let Some(normal_iter) = reader.read_normals() {
+                scratch.normals.extend(normal_iter);
+            }
         }
 
         scratch.indices.clear();
@@ -331,7 +247,7 @@ fn parse_mesh_instance(
                 let (triangle_indices, _) = scratch.indices.as_chunks::<3>();
 
                 for &triangle in triangle_indices {
-                    push_triangle(triangle, triangles, scratch, material_idx as u32);
+                    push_triangle::<P>(triangle, triangles, scratch, material_idx as u32);
                 }
             }
             gltf::mesh::Mode::TriangleStrip => {
@@ -342,9 +258,19 @@ fn parse_mesh_instance(
 
                     // winding order flips every odd triangle
                     if i.is_multiple_of(2) {
-                        push_triangle([idx0, idx1, idx2], triangles, scratch, material_idx as u32);
+                        push_triangle::<P>(
+                            [idx0, idx1, idx2],
+                            triangles,
+                            scratch,
+                            material_idx as u32,
+                        );
                     } else {
-                        push_triangle([idx0, idx2, idx1], triangles, scratch, material_idx as u32);
+                        push_triangle::<P>(
+                            [idx0, idx2, idx1],
+                            triangles,
+                            scratch,
+                            material_idx as u32,
+                        );
                     }
                 }
             }
@@ -357,7 +283,12 @@ fn parse_mesh_instance(
                             unreachable!()
                         };
 
-                        push_triangle([idx0, idx1, idx2], triangles, scratch, material_idx as u32);
+                        push_triangle::<P>(
+                            [idx0, idx1, idx2],
+                            triangles,
+                            scratch,
+                            material_idx as u32,
+                        );
                     }
                 }
             }
@@ -414,23 +345,17 @@ fn import_gltf(
 }
 
 #[profiling::function]
-fn load_gltf(reader: impl SceneReader, root_transform: Mat4) -> Result<Scene<pbrless::Pipeline>> {
+fn load_gltf<P: GltfPipeline>(reader: impl SceneReader, root_transform: Mat4) -> Result<Scene<P>> {
     let (document, buffers, images) = import_gltf(reader)?;
 
     let (mut materials, mut material_extras) = document
         .materials()
-        .map(|material| parse_material(&material, &images))
+        .map(|material| P::parse_material(&material, &images))
         .collect::<Result<(Vec<_>, Vec<_>)>>()?;
 
-    // default fallback material
-    materials.push(pbrless::Material {
-        texturing: None,
-        alpha_threshold: None,
-        base_color: [255, 255, 255, 255],
-        emissive: false,
-    });
-
-    material_extras.push(GltfMaterialExtras { texturing: None });
+    let (fallback_material, fallback_extras) = P::fallback_material();
+    materials.push(fallback_material);
+    material_extras.push(fallback_extras);
 
     let mut instances = Vec::new();
     for scene in document.scenes() {
@@ -457,7 +382,7 @@ fn load_gltf(reader: impl SceneReader, root_transform: Mat4) -> Result<Scene<pbr
     let mut scratch = MeshScratch::default();
 
     for instance in instances {
-        if let Err(e) = parse_mesh_instance(
+        if let Err(e) = parse_mesh_instance::<P>(
             instance,
             &mut bounds,
             &materials,
@@ -504,7 +429,7 @@ impl Format for Gltf {
     ];
 }
 
-impl InputFormat<pbrless::Pipeline> for Gltf {
+impl<P: GltfPipeline> InputFormat<P> for Gltf {
     type Config = GltfConfig;
     type Error = Error;
 
@@ -512,7 +437,7 @@ impl InputFormat<pbrless::Pipeline> for Gltf {
         transform_matrix: [[f32; 4]; 4],
         reader: R,
         config: GltfConfig,
-    ) -> Result<Scene<pbrless::Pipeline>> {
+    ) -> Result<Scene<P>> {
         let root_transform = Mat4::from_cols_array_2d(&transform_matrix)
             * Mat4::from_scale(Vec3::splat(config.base_scale));
 
