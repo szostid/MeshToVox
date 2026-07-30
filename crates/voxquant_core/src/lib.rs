@@ -16,6 +16,7 @@
     clippy::cast_precision_loss
 )]
 
+use crate::pipelines::VoxelPipeline;
 use crate::scene::Scene;
 use crate::voxelizer::VoxelizationMode;
 use std::error::Error;
@@ -23,9 +24,8 @@ use std::path::Path;
 
 pub use image;
 
-mod pipelines;
-
 pub mod io;
+pub mod pipelines;
 pub mod scene;
 pub mod voxelizer;
 
@@ -57,7 +57,7 @@ pub trait Format {
 }
 
 /// Base trait for supported input file formats.
-pub trait InputFormat: Format {
+pub trait InputFormat<P: VoxelPipeline>: Format {
     /// The specific format config required by this format
     type Config;
     /// The error type returned by this format when it fails
@@ -76,7 +76,7 @@ pub trait InputFormat: Format {
         transform_matrix: [[f32; 4]; 4],
         reader: R,
         format_config: Self::Config,
-    ) -> Result<Scene, Self::Error>;
+    ) -> Result<Scene<P>, Self::Error>;
 
     /// Loads the scene from the file at `path` using this format.
     ///
@@ -90,7 +90,7 @@ pub trait InputFormat: Format {
         transform_matrix: [[f32; 4]; 4],
         path: &Path,
         format_config: Self::Config,
-    ) -> Result<Scene, Self::Error> {
+    ) -> Result<Scene<P>, Self::Error> {
         let reader = io::LocalFile::open(path)?;
 
         Self::read(transform_matrix, reader, format_config)
@@ -98,7 +98,7 @@ pub trait InputFormat: Format {
 }
 
 /// Base trait for supported output file formats.
-pub trait OutputFormat: Format {
+pub trait OutputFormat<P: VoxelPipeline>: Format {
     /// The specific format config required by this format
     type Config;
     /// The error type returned by this format when it fails
@@ -112,7 +112,7 @@ pub trait OutputFormat: Format {
     /// missing or malformed files or unsupported features will cause
     /// erros.
     fn voxelize_and_write<W: io::SceneWriter>(
-        scene: Scene,
+        scene: Scene<P>,
         writer: W,
         format_config: Self::Config,
         voxelization_config: &VoxelizationConfig,
@@ -125,7 +125,7 @@ pub trait OutputFormat: Format {
     /// missing or malformed files or unsupported features will cause
     /// erros.
     fn voxelize_and_save(
-        scene: Scene,
+        scene: Scene<P>,
         path: &Path,
         format_config: Self::Config,
         voxelization_config: &VoxelizationConfig,

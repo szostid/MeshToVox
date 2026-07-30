@@ -36,37 +36,39 @@ impl fmt::Display for VoxelizationMode {
 /// A sink for generated voxel data.
 ///
 /// Implement this trait to define how and where voxel output is stored.
-pub trait VoxelStore {
+pub trait VoxelStore<Data> {
     /// Appends a voxel at `pos` with a `color` to the storage.
     ///
     /// The function won't be called if a voxel is discarded because of the alpha
     /// threshold. The provided position is the global position (i.e. the `0,0,0`
     /// is the `min` position of the AABB of the scene) and not a position within
     /// the slice of the voxelized scene.
-    fn add_voxel(&mut self, pos: [i32; 3], color: [u8; 4], is_emissive: bool);
+    fn add_voxel(&mut self, pos: [i32; 3], data: Data);
 }
 
 /// Voxelizes the edges of the provided `triangle`.
 #[inline]
-fn voxelize_wireframe<P: VoxelPipeline, T: VoxelStore>(
+fn voxelize_wireframe<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
     store: &mut T,
     shading: &P::TriangleData<'_>,
+    interpolator: &TriangleInterpolator,
     triangle: Triangle<P::Vertex>,
     range: Range<[i32; 3]>,
 ) {
     let [a, b, c] = triangle.unpack_vertices_to_glam();
 
-    voxelize_line::<P, T>(store, shading, a, b, range.clone());
-    voxelize_line::<P, T>(store, shading, b, c, range.clone());
-    voxelize_line::<P, T>(store, shading, a, c, range);
+    voxelize_line::<P, T>(store, shading, interpolator, a, b, range.clone());
+    voxelize_line::<P, T>(store, shading, interpolator, b, c, range.clone());
+    voxelize_line::<P, T>(store, shading, interpolator, a, c, range);
 }
 
 /// Voxelizes the provided `triangle`.
 #[inline]
 #[expect(clippy::suboptimal_flops, reason = "FMA makes the function unreadable")]
-fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore, const FAT: bool>(
+fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore<P::VoxelData>, const FAT: bool>(
     store: &mut T,
     shading: &P::TriangleData<'_>,
+    interpolator: &TriangleInterpolator,
     triangle: Triangle<P::Vertex>,
     range: Range<[i32; 3]>,
 ) {
@@ -102,9 +104,9 @@ fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore, const FAT: bool>(
     const EPSILON: f32 = -0.001;
 
     // conservative rasterization
-    voxelize_wireframe(store, shading, triangle, range.clone());
+    voxelize_wireframe::<P, T>(store, shading, interpolator, triangle, range.clone());
 
-    let normal = shading.precalc.normal();
+    let normal = interpolator.normal();
     let [raw_a, raw_b, raw_c] = triangle.unpack_vertices_to_glam();
 
     let d_axis = normal.abs().max_position();
@@ -169,7 +171,7 @@ fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore, const FAT: bool>(
                 // note that `plane_d` is the plane constant `D` from the equation above
                 let depth = (plane_d - normal_u * p.x - normal_v * p.y) * normal_d_inv;
 
-                let color = shading.sample_from_bary(Vec3::new(a_bary, b_bary, c_bary));
+                let color = P::sample_from_bary(shading, Vec3::new(a_bary, b_bary, c_bary));
 
                 if let Some(color) = color {
                     if FAT {
@@ -182,7 +184,7 @@ fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore, const FAT: bool>(
                             voxel_pos[v_axis] = v;
                             voxel_pos[d_axis] = d;
 
-                            store.add_voxel(voxel_pos, color, shading.is_emissive());
+                            store.add_voxel(voxel_pos, color);
                         }
                     } else {
                         let mut voxel_pos = [0; 3];
@@ -190,7 +192,7 @@ fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore, const FAT: bool>(
                         voxel_pos[v_axis] = v;
                         voxel_pos[d_axis] = depth.floor() as i32;
 
-                        store.add_voxel(voxel_pos, color, shading.is_emissive());
+                        store.add_voxel(voxel_pos, color);
                     }
                 }
             }
@@ -200,9 +202,10 @@ fn voxelize_triangle<P: VoxelPipeline, T: VoxelStore, const FAT: bool>(
 
 /// Voxelizes a line going from `p1` to `p2` with the provided shading using a DDA algorythm
 #[inline]
-fn voxelize_line<P: VoxelPipeline, T: VoxelStore>(
+fn voxelize_line<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
     store: &mut T,
     shading: &P::TriangleData<'_>,
+    interpolator: &TriangleInterpolator,
     p1: Vec3,
     p2: Vec3,
     range: Range<[i32; 3]>,
@@ -267,10 +270,11 @@ fn voxelize_line<P: VoxelPipeline, T: VoxelStore>(
     let max_steps = (t_exit - t_entry) as u32 * 10;
 
     for _ in 0..max_steps {
-        let color = shading.snap_and_get_color(voxel_pos);
+        let bary = interpolator.get_closest_barycentric(voxel_pos.as_vec3());
+        let color = P::sample_from_bary(&shading, bary);
 
         if let Some(color) = color {
-            store.add_voxel(voxel_pos.to_array(), color, shading.is_emissive());
+            store.add_voxel(voxel_pos.to_array(), color);
         }
 
         if voxel_pos == end {
@@ -290,7 +294,7 @@ fn voxelize_line<P: VoxelPipeline, T: VoxelStore>(
 
 /// Voxelizes the points of the provided `triangle`
 #[inline]
-fn voxelize_points<P: VoxelPipeline, T: VoxelStore>(
+fn voxelize_points<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
     store: &mut T,
     shading: &P::TriangleData<'_>,
     triangle: Triangle<P::Vertex>,
@@ -299,14 +303,14 @@ fn voxelize_points<P: VoxelPipeline, T: VoxelStore>(
         .vertices
         .map(|vertex| vertex.pos().map(|p| p as i32));
 
-    if let Some(color) = shading.sample_from_bary(Vec3::X) {
-        store.add_voxel(a, color, shading.is_emissive());
+    if let Some(data) = P::sample_from_bary(shading, Vec3::X) {
+        store.add_voxel(a, data);
     }
-    if let Some(color) = shading.sample_from_bary(Vec3::Y) {
-        store.add_voxel(b, color, shading.is_emissive());
+    if let Some(data) = P::sample_from_bary(shading, Vec3::Y) {
+        store.add_voxel(b, data);
     }
-    if let Some(color) = shading.sample_from_bary(Vec3::Z) {
-        store.add_voxel(c, color, shading.is_emissive());
+    if let Some(data) = P::sample_from_bary(shading, Vec3::Z) {
+        store.add_voxel(c, data);
     }
 }
 
@@ -396,9 +400,9 @@ impl TriangleInterpolator {
 
 /// Voxelizes a slice of a scene using the provided settings.
 #[profiling::function]
-pub fn voxelize_scene<P: VoxelPipeline, T: VoxelStore>(
+pub fn voxelize_scene<P: VoxelPipeline, T: VoxelStore<P::VoxelData>>(
     store: &mut T,
-    input: SceneSlice<'_, P::Vertex, P::Material>,
+    input: SceneSlice<'_, P>,
     mode: VoxelizationMode,
     size: u32,
 ) {
@@ -407,9 +411,11 @@ pub fn voxelize_scene<P: VoxelPipeline, T: VoxelStore>(
 
     input.for_each_triangle(|mut triangle| {
         for vertex in &mut triangle.vertices {
-            vertex.pos =
-                ((Vec3::from_array(vertex.pos) - Vec3::from_array(input.scene.bounds.min)) * scale)
-                    .to_array();
+            vertex.set_pos(
+                ((Vec3::from_array(vertex.pos()) - Vec3::from_array(input.scene.bounds.min))
+                    * scale)
+                    .to_array(),
+            );
         }
 
         let mat_id = triangle.material_index;
@@ -420,18 +426,39 @@ pub fn voxelize_scene<P: VoxelPipeline, T: VoxelStore>(
             .get(mat_id as usize)
             .unwrap_or(&input.scene.materials[0]);
 
+        let shading = P::prepare_triangle(material, &triangle);
+        let interpolator = TriangleInterpolator::new(&triangle);
+
         match mode {
             VoxelizationMode::Triangles => {
-                voxelize_triangle::<P, T, false>(store, &shading, triangle, input.range.clone());
+                voxelize_triangle::<P, T, false>(
+                    store,
+                    &shading,
+                    &interpolator,
+                    triangle,
+                    input.range.clone(),
+                );
             }
             VoxelizationMode::FatTriangles => {
-                voxelize_triangle::<P, T, true>(store, &shading, triangle, input.range.clone());
+                voxelize_triangle::<P, T, true>(
+                    store,
+                    &shading,
+                    &interpolator,
+                    triangle,
+                    input.range.clone(),
+                );
             }
             VoxelizationMode::Wireframe => {
-                voxelize_wireframe(store, &shading, triangle, input.range.clone());
+                voxelize_wireframe::<P, T>(
+                    store,
+                    &shading,
+                    &interpolator,
+                    triangle,
+                    input.range.clone(),
+                );
             }
             VoxelizationMode::Points => {
-                voxelize_points(store, &shading, triangle);
+                voxelize_points::<P, T>(store, &shading, triangle);
             }
         }
     });

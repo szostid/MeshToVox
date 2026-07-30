@@ -1,19 +1,19 @@
 //! In-memory representation of the [`Scene`].
 use std::ops::Range;
 
-use crate::pipelines::VertexData;
+use crate::pipelines::{VertexData, VoxelPipeline};
 use glam::Vec3;
 
 /// A complete 3D scene with all the data required for voxelization.
-pub struct Scene<V: VertexData, M> {
+pub struct Scene<P: VoxelPipeline> {
     /// All triangles contained within all instances of models of the scene.
     ///
     /// The scene does not distinguish models. If you have a model
     /// with multiple instances, you should just expand them all
     /// into different triangles.
-    pub triangles: Vec<Triangle<V>>,
+    pub triangles: Vec<Triangle<P::Vertex>>,
     /// All materials contained within the scene
-    pub materials: Vec<M>,
+    pub materials: Vec<P::Material>,
     /// The bounding box of all triangles within the scene.
     ///
     /// During voxelization, the voxels (which should all be positioned
@@ -25,9 +25,9 @@ pub struct Scene<V: VertexData, M> {
 }
 
 /// A part of the scene.
-pub struct SceneSlice<'a, V: VertexData, M> {
+pub struct SceneSlice<'a, P: VoxelPipeline> {
     /// The original, whole scene
-    pub scene: &'a Scene<V, M>,
+    pub scene: &'a Scene<P>,
     /// The voxel range (in the scene's bounds!) that the scene
     /// spans over. Note that if you don't provide actual
     /// [`indices`](Self::indices) the voxelizer will still visit
@@ -41,8 +41,8 @@ pub struct SceneSlice<'a, V: VertexData, M> {
     pub indices: Option<&'a [usize]>,
 }
 
-impl<V: VertexData, M> SceneSlice<'_, V, M> {
-    pub fn for_each_triangle(&self, mut op: impl FnMut(Triangle<V>)) {
+impl<P: VoxelPipeline> SceneSlice<'_, P> {
+    pub fn for_each_triangle(&self, mut op: impl FnMut(Triangle<P::Vertex>)) {
         match self.indices {
             Some(indices) => {
                 for &idx in indices {

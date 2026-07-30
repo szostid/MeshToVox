@@ -1,7 +1,6 @@
 use crate::pipelines::{VertexData, VoxelPipeline};
 use crate::scene::{Triangle, WrapMode};
-use crate::voxelizer::TriangleInterpolator;
-use glam::{IVec3, Vec2, Vec3, Vec4};
+use glam::{Vec2, Vec3, Vec4};
 use std::sync::Arc;
 
 pub use image::RgbaImage;
@@ -26,6 +25,10 @@ impl VertexData for Vertex {
     #[inline]
     fn pos(&self) -> [f32; 3] {
         self.pos
+    }
+
+    fn set_pos(&mut self, pos: [f32; 3]) {
+        self.pos = pos;
     }
 }
 
@@ -96,8 +99,7 @@ struct TriangleTextureData<'a> {
     pub wrap: [WrapMode; 2],
 }
 
-struct TriangleData<'a> {
-    precalc: TriangleInterpolator,
+pub struct TriangleData<'a> {
     vert_colors: [[u8; 4]; 3],
     base_color: [u8; 4],
     is_emissive: bool,
@@ -156,14 +158,6 @@ impl TriangleData<'_> {
 
         Some(color)
     }
-
-    #[inline]
-    #[must_use]
-    pub fn snap_and_get_color(&self, pos: IVec3) -> Option<[u8; 4]> {
-        let bary = self.precalc.get_closest_barycentric(pos.as_vec3());
-
-        self.sample_from_bary(bary)
-    }
 }
 
 pub struct PbrlessPipeline;
@@ -171,6 +165,7 @@ pub struct PbrlessPipeline;
 impl VoxelPipeline for PbrlessPipeline {
     type Vertex = Vertex;
     type Material = Material;
+    type VoxelData = [u8; 4];
 
     type TriangleData<'a> = TriangleData<'a>;
 
@@ -187,11 +182,14 @@ impl VoxelPipeline for PbrlessPipeline {
 
         TriangleData {
             texture,
-            precalc: TriangleInterpolator::new(triangle),
             vert_colors: triangle.unpack(|v| v.color),
             is_emissive: material.emissive,
             base_color: material.base_color,
             alpha_threshold: material.alpha_threshold,
         }
+    }
+
+    fn sample_from_bary(data: &Self::TriangleData<'_>, bary: Vec3) -> Option<[u8; 4]> {
+        data.sample_from_bary(bary)
     }
 }
