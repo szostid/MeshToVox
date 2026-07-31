@@ -255,6 +255,9 @@ fn parse_mesh_instance<P: GltfPipeline>(
         scratch.uvs.clear();
         if let Some(uv_iter) = reader.read_tex_coords(material_tex_coord) {
             scratch.uvs.extend(uv_iter.into_f32());
+        } else if let Some(uv_iter) = reader.read_tex_coords(0) {
+            println!("Falling back to TEXCOORD_0 uvs because the provided set did not exist");
+            scratch.uvs.extend(uv_iter.into_f32());
         }
 
         scratch.colors.clear();

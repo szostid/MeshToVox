@@ -202,7 +202,7 @@ impl VoxelPipeline for Pipeline {
         material: &'a Self::Material,
         triangle: &Triangle<Vertex>,
     ) -> Self::TriangleSampler<'a> {
-        let uvs = triangle.try_unpack(Vertex::uv).unwrap();
+        let uvs = triangle.unpack(|v| v.uv().unwrap_or_default());
 
         let albedo_texture = material
             .texturing

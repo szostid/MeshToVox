@@ -49,14 +49,10 @@ impl GltfPipeline for pbr::Pipeline {
         };
 
         let emissive = mat.emissive_factor().into_iter().any(|c| c > 0.0);
+
         let pbr = mat.pbr_metallic_roughness();
 
-        let base_color = if emissive {
-            let [r, g, b] = mat.emissive_factor().map(|r| (r * 255.0) as u8);
-            [r, g, b, 255]
-        } else {
-            pbr.base_color_factor().map(|r| (r * 255.0) as u8)
-        };
+        let base_color = pbr.base_color_factor().map(|r| (r * 255.0) as u8);
 
         let metallic_factor = pbr.metallic_factor();
         let roughness_factor = pbr.roughness_factor();

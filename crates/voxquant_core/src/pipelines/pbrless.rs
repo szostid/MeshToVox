@@ -149,7 +149,7 @@ impl VoxelPipeline for Pipeline {
         let albedo_texture = material
             .texturing
             .as_ref()
-            .map(|data| data.as_triangle(triangle.try_unpack(Vertex::uv).unwrap()));
+            .map(|data| data.as_triangle(triangle.unpack(|v| v.uv().unwrap_or_default())));
 
         TriangleData {
             albedo_texture,

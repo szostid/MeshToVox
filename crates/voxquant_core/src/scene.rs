@@ -107,12 +107,8 @@ impl<V: VertexData> Triangle<V> {
         self.unpack(|vertex| Vec3::from_array(vertex.pos()))
     }
 
-    pub fn try_unpack<T>(&self, f: impl Fn(&V) -> Option<T>) -> Option<[T; 3]> {
-        let [a, b, c] = &self.vertices;
-
-        Some([f(a)?, f(b)?, f(c)?])
-    }
-
+    #[inline]
+    #[must_use]
     pub fn unpack<T>(&self, f: impl Fn(&V) -> T) -> [T; 3] {
         let [a, b, c] = &self.vertices;
 
